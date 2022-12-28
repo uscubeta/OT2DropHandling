@@ -1,0 +1,25 @@
+
+install Python 3.7.6 or later
+https://docs.opentrons.com/v2/writing.html#simulate-block
+
+necessary packages:
+jupyter
+jupyter lab
+numpy
+matplotlib
+scipy
+pandas
+tqdm
+
+these should be already loaded:
+os
+binascii
+glob
+time
+string
+timeit
+
+
+For the following, use pip:
+pip install -U pyvisa
+pip install opentrons
