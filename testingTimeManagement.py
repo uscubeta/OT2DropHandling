@@ -1,8 +1,8 @@
-# To Start, run Anaconda prompt, navigate with change directory ($:cd ...) and type in:
+# To Begin, run Anaconda prompt, navigate with change directory ($:cd ...) and type in:
 # $: conda env list # to check if the environment is available
 # $: activate OT2DropHandling  # to activate the environment
-# $: jupyter-lab
-# this assumes that the environment was created using:
+# $: jupyter-lab  # this runs a notebook on YOUR computer, not on OT-2
+# Note,this assumes that the environment was created using:
 # $: conda create --name OT2DropHandling --file OT2DropHandlingEnv.txt
 # AND that the following packages added via pip
 # $ pip install -U pyvisa
@@ -10,10 +10,24 @@
 # $ pip install ffmpy # to interact with camera on OT2
 # you can check if the above three packages are installed with...
 # $ pip list
-# for details, https://docs.opentrons.com/v2/new_protocol_api.html
-# robot IP address: http://169.254.59.185:48888
+# for detailed documentation, visit:
+# https://docs.opentrons.com/v2/new_protocol_api.html
+# current robot IP address: http://169.254.59.185:48888
 
-import json
+# To Start in OT's jupyter notebook, open Opentrons app, then select
+# Devices > Robot Settings >  Advanced > Jupyter Notebook > Launch
+# Then, run the following code 4 lines of code
+# import os  # to control the robot server
+# import opentrons.execute  # to control robot execution
+# os.system("systemctl stop opentrons-robot-server")  # stop connection to app
+# protocol.set_rail_lights(True)  # check! only works if a single connection to robot
+# Remember to run the following line at the end of experiment:
+# os.system("systemctl start opentrons-robot-server")  # restart connection to app
+# To close experiment, save notebook, then Shutdown kernel.
+
+
+
+# import json
 import time
 import math
 from copy import deepcopy
