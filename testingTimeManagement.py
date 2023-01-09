@@ -437,7 +437,7 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
     # The second loop modifies the timestamp so that exp_sequence.sort doesn't undo the work
 
     print("Running: prioritize_sequence(). Prioritizing and sorting list.")  # debug
-    print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
+    # print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
     exp_sequence = deepcopy(in_seq)
     # MODIFY: sometimes this sort swaps previously swapped actions, undoing work...
     exp_sequence.sort(key=lambda sort_action: sort_action.start)
@@ -530,7 +530,7 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
             ix = ix + 1  # going forward one, so next_action can be checked
 
     # print("Shifting start timestamps in case start times are equal to one another.")  # debug
-    print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
+    # print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
     iterations = 0
     hall_pass = len(exp_sequence) * 3
     ix = 1
@@ -546,16 +546,18 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
         this_action = exp_sequence[ix]  # should be an alias, not a copy
         old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
         # if two timestamps overlap
-        if this_action.start == old_action.start:
+        if this_action.start <= old_action.start:
+            # shifting all except 'load' or 'unload'
             if this_action.action == 'mix' or \
                     this_action.action == 'reload' or \
                     this_action.action == 'rinse':
-                this_action.change_start(this_action.start + 10)
+                this_action.change_start(old_action.start + 10)
+                # so that swap is not done redundantly, the time will be shifted again
                 print("Shifted action: ", ix, this_action)
             ix = ix + 1  # going forward one, so next_action can be checked
         else:
             ix = ix + 1  # going forward one, so next_action can be checked
-    print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
+    # print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
     return exp_sequence
 
 
@@ -607,7 +609,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
             # prioritize in order (1) unload (2) mix (3) load (4) rinse
             # Case: both are identical (0)
             if this_action.action == old_action.action:
-                print("Both actions are the same, checking order")
+                # print("Both actions are the same, checking order")
                 exp_sequence = check_order_swap(exp_sequence, sam_indx, ix, (ix - 1))
                 this_action = exp_sequence[ix]  # should be an alias, not a copy
                 old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
@@ -629,7 +631,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     ix = 1
             # Case: reload (2)
             elif this_action.action == 'reload':
-                print("Reload can be moved earlier or later.")  # debug
+                # print("Reload can be moved earlier or later.")  # debug
                 if old_action.action == 'unload' or old_action.action == 'reload':
                     this_action.change_start(old_action.end)  # new time to start mixing
                     print("Moving 'reload' to later:", this_action)  # debug
@@ -699,63 +701,59 @@ def swap_into_gaps(in_seq: List[ActClass]):
     # Check the gaps between two actions and see if the following
     # action can be swapped into the gap
     exp_sequence = deepcopy(in_seq)
-    loaded_samples = []
-    unloaded_samples = []
-
-    for ix in range(2):
-        this_action = exp_sequence[ix]  # should be an alias, not a copy
-        if this_action.action == 'load':
-            if this_action.sam_id not in loaded_samples:
-                loaded_samples.append(this_action.sam_id)
-        elif this_action.action == 'unload':
-            if this_action.sam_id not in unloaded_samples:
-                unloaded_samples.append(this_action.sam_id)
 
     iterations = 0
     hall_pass = len(exp_sequence) * 5
-    ix = 2
-    while ix < len(exp_sequence):
+    iter_ix = 2
+    while iter_ix < len(exp_sequence):
         iterations += 1
         if iterations > hall_pass:
             print("WARNING: something is wrong, bailing out of while loop.")
             break  # emergency break out of while loop
         # iterate over list of actions, starting with the second action
-        if ix < 2:
-            ix = 2  # if accidentally went back to the first
+        if iter_ix < 2:
+            iter_ix = 2  # if accidentally went back to the first
 
-        last_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
-        prev_action = exp_sequence[(ix - 2)]  # should be an alias, not a copy
-        this_action = exp_sequence[ix]  # should be an alias, not a copy
+        last_action = exp_sequence[(iter_ix - 1)]  # should be an alias, not a copy
+        prev_action = exp_sequence[(iter_ix - 2)]  # should be an alias, not a copy
+        this_action = exp_sequence[iter_ix]  # should be an alias, not a copy
         gap_between = last_action.start - prev_action.end
 
         # print("ix is now:", ix)  # debug
-        if this_action.action == 'load':
-            if this_action.sam_id not in loaded_samples:
-                loaded_samples.append(this_action.sam_id)
-        elif this_action.action == 'unload':
-            if this_action.sam_id not in unloaded_samples:
-                unloaded_samples.append(this_action.sam_id)
+        loaded_samples = []  # need a new list since can go back to prev iteration
+        unloaded_samples = []  # need a new list since can go back to prev iteration
+        # START HERE: (I think I fixed the bug.)
+        for subx in range(iter_ix - 1):
+            sub_act = exp_sequence[subx]
+            if sub_act.action == 'load':
+                if sub_act.sam_id not in loaded_samples:
+                    loaded_samples.append(sub_act.sam_id)
+            elif sub_act.action == 'unload':
+                if sub_act.sam_id not in unloaded_samples:
+                    unloaded_samples.append(sub_act.sam_id)
 
         if this_action.action == 'mix':
             if gap_between >= mix_time_s and this_action.sam_id in loaded_samples:
-                print("Moving ", this_action, " between ", prev_action, " and ", last_action)  # debug
+                print("ix:", iter_ix, "Moving ", this_action, " between ", prev_action, " and ", last_action)  # debug
+                print("Loaded samples: ", loaded_samples)  # debug
                 this_action.change_start(prev_action.end)
-                exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
+                exp_sequence = swap_actions(exp_sequence, iter_ix, (iter_ix - 1))
                 exp_sequence = find_gaps_compress_actions(exp_sequence)
-                ix = ix - 1  # going back one , to check that this_action moved correctly
+                iter_ix = iter_ix - 2  # going back two, to check that this_action moved correctly
             else:
-                ix = ix + 1  # iterating forward
+                iter_ix = iter_ix + 1  # iterating forward
         elif this_action.action == 'rinse':
             if gap_between >= rinse_time_s and this_action.sam_id in unloaded_samples:
-                print("Moving ", this_action, " between ", prev_action, " and ", last_action)
+                print("ix:", iter_ix, "Moving ", this_action, " between ", prev_action, " and ", last_action)
+                print("Unloaded samples: ", unloaded_samples)  # debug
                 this_action.change_start(prev_action.end)
-                exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
+                exp_sequence = swap_actions(exp_sequence, iter_ix, (iter_ix - 1))
                 exp_sequence = find_gaps_compress_actions(exp_sequence)
-                ix = ix - 1  # going back one , to check that this_action moved correctly
+                iter_ix = iter_ix - 2  # going back two, to check that this_action moved correctly
             else:
-                ix = ix + 1  # iterating forward
+                iter_ix = iter_ix + 1  # iterating forward
         else:
-            ix = ix + 1  # iterating forward
+            iter_ix = iter_ix + 1  # iterating forward
 
     return exp_sequence
 
