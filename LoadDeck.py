@@ -738,10 +738,10 @@ def run(protocol: protocol_api.ProtocolContext):
         return res_array
 
     rinse_res = make_res_array(exp.rinse_res_loc)  # array of rinse well objects
-    # waste_res = make_res_array(exp.waste_res_loc)  # array of waste well objects
-    # sol_res = make_res_array(exp.sol_res_loc)  # array of solution well objects
+    waste_res = make_res_array(exp.waste_res_loc)  # array of waste well objects
+
     this_rinse = rinse_res[exp.this_indx_rinse]  # Labware well object for protocol use
-    # this_waste = waste_res[exp.this_indx_waste]  # Labware well object for protocol use
+    this_waste = waste_res[exp.this_indx_waste]  # Labware well object for protocol use
 
     # begin experiment, set speeds and home
     def set_speeds(rate_change):
@@ -770,12 +770,8 @@ def run(protocol: protocol_api.ProtocolContext):
     pipette_lg.pick_up_tip()
 
     # some actions here....
-    some_vol = 1000
-    for plate in reservoir_plates:
-        pipette_lg.transfer(some_vol, this_rinse, plate.wells(), new_tip='never')
-    some_vol = 400
-    for plate in sample_plates:
-        pipette_lg.transfer(some_vol, this_rinse, plate.wells(), new_tip='never')
+    some_vol = 1000  # transfer 1mL from rinse to waste
+    pipette_lg.transfer(some_vol, this_rinse, this_waste, new_tip='never')
 
     # return pipette tip
     protocol.set_rail_lights(False)

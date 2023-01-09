@@ -23,7 +23,7 @@
 # protocol.set_rail_lights(True)  # check! only works if a single connection to robot
 # Remember to run the following line at the end of experiment:
 # os.system("systemctl start opentrons-robot-server")  # restart connection to app
-# To close experiment, save notebook, then Shutdown kernel.
+# To close experiment, save notebook, then Shutdown kernel and Quit
 
 
 
@@ -42,18 +42,21 @@ from opentrons.protocol_api_experimental import pipette_context
 metadata = {
     'apiLevel': '2.13',
     'protocolName': 'testing Time management during sample incubation',
-    'description': '''Run by USC on Dec 21, 2022. ''',
+    'description': '''Run by USC on Jan 09, 2023. ''',
     'author': 'Ulyana S. Cubeta',
-    'rundate': '2022/12/21'
+    'rundate': '2023/01/09'
 }
 
 # GLOBAL variables, used throughout!
 # if changing tips during load/mix/rinse, please ADJUST these
+
 load_time_s = 30  # estimated time for 'load' action, in seconds
 mix_time_s = 20  # estimated time for 'mix' action, in seconds
 rinse_time_s = 60  # estimated time for 'rinse' or 'unload' action
 start_time = 30  # seconds, when first action will run
-load_mixes = 3
+load_mixes = 3  # number of times to mix when loading
+# if incubation time exceeds this, will reload with fresh solution
+max_time_before_evap_m = 45  # minutes
 
 
 # MODIFY: move these class objects and functions to a different file and import
@@ -164,7 +167,7 @@ class ExperimentData:
         self.pln_seq_stamps: list[ActClass] = []  # in seconds
         # where each tuple is (sample_index, action, start_time_s, end_time_s)
         # eg: [(0, 'load', 10, 20), (0, 'mix', 110, 120), (0, 'mix', 210, 220), (0, 'rinse', 310, 320)]
-        self.all_samples: list[list[SampleWell]] = []
+        self.all_samples: list[list[SampleWellData]] = []
         self.waste_data: list[ResWell] = []
         self.rinse_data: list[ResWell] = []
         self.res_data: list[ResWell] = []
@@ -207,7 +210,7 @@ class ExperimentData:
         return this_label
 
 
-class SampleWell:
+class SampleWellData:
     # need a way to save this metadata (MODIFY!!)
     # may want to switch to getters/setters/properties
     def __init__(self):
@@ -218,21 +221,24 @@ class SampleWell:
         self.well_indx = 0  # well index for this sample on plate_indx plate, 0 to 3 for L to R
         self.loc_indx = (0, 0)  # (plate_indx, well_indx) # tuple has to be replaced, not edited
         self.sam_timing = 0  # where first sample we should load is 0, & last is (sam_num-1)
-        self.well_name = 'W1'  # name of the well # irrelevant?
+        # self.well_name = 'W1'  # name of the well # irrelevant?
         self.targ_incub_time_m = 1  # target time for incubation (in minutes)
         # self.targ_incub_gap_time_m = 1  # target time in between mixing
+        self.targ_num_reload = 0  # if incubation time is long, will remove and reload incubation liquid
         self.targ_num_mixes = 1  # target num. of mixes during incubation
         self.targ_num_rinses = 3  # target num. of rinses after removing incub. liquid
         self.rinsed_num = 0  # how often has this sample been rinsed?
         self.mixed_num = 0  # how often has this sample been mixed?
+        self.reloaded_num = 0  # how often has this sample been reloaded?
         self.solution_location = (0, 0)  # location for inoculation from exp.sol_res_loc (slot_indx, well_indx)
         self.solution_index = 0  # corresponding to index in exp.res_data
         self.incub_solution = "DI water"  # name of incubation solution
         self.incub_concen = 0  # uM (micromol/L) molarity of incubation solution
         self.incub_st_timestmp = 1208125  # start time collected @ time.perf_counter()
         self.incub_end_timestmp = 1208140  # end time collected @ time.perf_counter()
+        self.incub_reload_timestmps = []  #  eg:[1208225, 1208325, ]  # reload time collected @ time.perf_counter()
         self.incub_mix_timestmps = []  # eg:[1208225, 1208325, ]  # mix time collected @ time.perf_counter()
-        self.rinse_timestmps = []  # eg: [1208225, 1208325, ]  # mixe time collected @ time.perf_counter()
+        self.rinse_timestmps = []  # eg: [1208225, 1208325, ]  # rinse time collected @ time.perf_counter()
         self.incub_tot_time_s = 15  # integer, in seconds
         self.incub_mix_time_s = []  # eg: [100, 200, ]  # integer, in seconds
         self.targ_act_seq = List[ActClass,]  # in seconds
@@ -256,7 +262,7 @@ class ActClass:
         # initializing function, _attribute is a hidden attribute !
         self._sam_id = sam_id  # integer of samples indexed 0 to num_sam
         # in the order entered by user_config_exp
-        self._action = action  # string ['load', 'unload', 'mix', 'rinse' , 'done']
+        self._action = action  # string ['load', 'unload', 'reload', 'mix', 'rinse' ]
         self._start_stamp = stamp  # integer of start timestamp (seconds) for the desired action
         self._end_stamp = self._calc_end()  # calculated, estimated end timestamp
 
@@ -308,7 +314,7 @@ class ActClass:
             prev_end_stamp = self._start_stamp + load_time_s
         elif self.action == 'mix':
             prev_end_stamp = self._start_stamp + mix_time_s
-        elif self.action == 'rinse' or self.action == 'unload':
+        elif self.action == 'rinse' or self.action == 'unload' or self.action == 'reload':
             prev_end_stamp = self._start_stamp + rinse_time_s
         else:
             prev_end_stamp = self._start_stamp
@@ -353,7 +359,7 @@ def swap_actions(exp_sequence: List[ActClass], act_pos_this: int, act_pos_that: 
         return exp_sequence
     exp_sequence[act_pos_this], exp_sequence[act_pos_that] = exp_sequence[act_pos_that], exp_sequence[act_pos_this]
     # print("Swapping actions for the positions: ", act_pos_this, " and ", act_pos_that)  # debug
-    # print("Now they're in order: ", exp_sequence[act_pos_this], exp_sequence[act_pos_that])
+    # print("Now they're in order: ", exp_sequence[act_pos_this], exp_sequence[act_pos_that])  # debug
     return exp_sequence
 
 
@@ -430,7 +436,7 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
     # use the sample load order to choose which goes first
     # The second loop modifies the timestamp so that exp_sequence.sort doesn't undo the work
 
-    print("Running: prioritize_sequence() Prioritizing and sorting list.")  # debug
+    print("Running: prioritize_sequence(). Prioritizing and sorting list.")  # debug
     print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")  # debug
     exp_sequence = deepcopy(in_seq)
     # MODIFY: sometimes this sort swaps previously swapped actions, undoing work...
@@ -471,14 +477,26 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     ix = ix - 1  # going back one , to check that old_action moved correctly
             # Case: unload  (1)
             elif this_action.action == 'unload':
-                # print("Case: unload  (1)")
+                # print("Case: unload  (1)")  # debug
                 print(ix, ": ", this_action, " should come before ", (ix - 1), ": ", old_action,
                       " Swapping them.")  # debug
                 exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
                 ix = ix - 1  # going back one , to check that old_action moved correctly
-            # Case: mix  (2)
+            # Case: reload  (2)
+            elif this_action.action == 'reload':
+                # print("Case: reload  (2)")  # debug
+                if old_action.action == 'unload' or old_action.action == 'reload':
+                    # print("Actions are in the correct order.")  # debug
+                    ix = ix + 1  # going forward one, so next_action can be checked
+                    # pass  # do nothing, no swapping!
+                else:
+                    print(ix, ": ", this_action, " should come before ", (ix - 1), ": ", old_action,
+                          " Swapping them.")  # debug
+                    exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
+                    ix = ix - 1  # going back one , to check that old_action moved correctly
+            # Case: mix  (3)
             elif this_action.action == 'mix':
-                # print("Case: mix  (2)")
+                # print("Case: mix  (3)")
                 if old_action.action == 'load' or old_action.action == 'rinse':
                     print(ix, ": ", this_action, " should come before ", (ix - 1), ": ", old_action,
                           " Swapping them.")  # debug
@@ -488,9 +506,9 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     # print("Actions are in the correct order.")  # debug
                     ix = ix + 1  # going forward one, so next_action can be checked
                     # pass  # do nothing, no swapping!
-            # Case: load  (3)
+            # Case: load  (4)
             elif this_action.action == 'load':
-                # print("Case: load  (3)")
+                # print("Case: load  (4)")
                 if old_action.action == 'rinse':
                     print(ix, ": ", this_action, " should come before ", (ix - 1), ": ", old_action,
                           " Swapping them.")  # debug
@@ -500,9 +518,9 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     # print("Actions are in the correct order.")  # debug
                     ix = ix + 1  # going forward one, so next_action can be checked
                     # pass  # do nothing, no swapping!
-            # Case: rinse  (4) or any others
+            # Case: rinse  (5) or any others
             else:
-                # print("Case: rinse  (4) or any others")
+                # print("Case: rinse  (5) or any others")
                 # if adding other actions, will need to re-asses
                 # print("Actions are in the correct order.")  # debug
                 ix = ix + 1  # going forward one, so next_action can be checked
@@ -529,7 +547,9 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
         old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
         # if two timestamps overlap
         if this_action.start == old_action.start:
-            if this_action.action == 'mix' or this_action.action == 'rinse':
+            if this_action.action == 'mix' or \
+                    this_action.action == 'reload' or \
+                    this_action.action == 'rinse':
                 this_action.change_start(this_action.start + 10)
                 print("Shifted action: ", ix, this_action)
             ix = ix + 1  # going forward one, so next_action can be checked
@@ -546,7 +566,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
     # prioritize in order (1) unload (2) mix (3) load (4) rinse
     # old_action = ActClass(0, 'none', 0)
     exp_sequence = deepcopy(in_seq)  # deep copy so that mix-ups can be interrupted
-    # print("Shifting timestamps for the list of ", len(exp_sequence), " actions.")  # debug
+    print("Shifting timestamps for the list of ", len(exp_sequence), " actions.")  # debug
     # print("Sample index in order of inoculation", sam_indx)  # debug
     exp_sequence = prioritize_sequence(exp_sequence, sam_indx)
     # print("Concatenated, sorted, swapped sequence is: ")  # debug
@@ -565,7 +585,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
         # iterate over list of actions, starting with the second action
         if ix == 0:
             ix = 1  # if accidentally went back to the first
-        print("ix is now:", ix)  # debug
+        # print("ix is now:", ix)  # debug
         this_action = exp_sequence[ix]  # should be an alias, not a copy
         old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
         # because the intent is to modify this_action or old_action
@@ -583,7 +603,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
             # print("=====================================================================================")  # debug
             # print(ix, ":", this_action, " starts at ", this_action.start,
             #      "before ", old_action, " ends at ", old_action.end)  # debug
-            # print("OVERLAP, changing timestamp.")
+            print("OVERLAP, changing timestamp. ix is now:", ix)  # debug
             # prioritize in order (1) unload (2) mix (3) load (4) rinse
             # Case: both are identical (0)
             if this_action.action == old_action.action:
@@ -606,6 +626,15 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     ix = 1
                 else:
                     print("WARNING: Why didn't prioritize_sequence work?")
+                    ix = 1
+            # Case: reload (2)
+            elif this_action.action == 'reload':
+                print("Reload can be moved earlier or later.")  # debug
+                if old_action.action == 'unload' or old_action.action == 'reload':
+                    this_action.change_start(old_action.end)  # new time to start mixing
+                    print("Moving 'reload' to later:", this_action)  # debug
+                else:
+                    print("WARNING: old action should have been swapped with reload!", old_action)
                     ix = 1
             # Case: mix (2)
             elif this_action.action == 'mix':
@@ -650,7 +679,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
     return exp_sequence
 
 
-def find_gaps(in_seq: List[ActClass]):
+def find_gaps_compress_actions(in_seq: List[ActClass]):
     # Find the gaps in exp_sequence and compress when there are gaps
     # moving the mix/rinse forwards if they fit into gaps (no swapping)
     exp_sequence = deepcopy(in_seq)
@@ -658,7 +687,7 @@ def find_gaps(in_seq: List[ActClass]):
     for ix in range(1, num_actions):
         this_action = exp_sequence[ix]  # should be an alias, not a copy
         if this_action.action == 'mix' or this_action.action == 'rinse':
-            # only shifting mix and rinse actions, NOT load/unload
+            # only shifting mix and rinse actions, NOT load/unload/reload
             old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
             if this_action.start > old_action.end:
                 # print("Changing action: ", this_action)  # debug
@@ -670,13 +699,25 @@ def swap_into_gaps(in_seq: List[ActClass]):
     # Check the gaps between two actions and see if the following
     # action can be swapped into the gap
     exp_sequence = deepcopy(in_seq)
+    loaded_samples = []
+    unloaded_samples = []
+
+    for ix in range(2):
+        this_action = exp_sequence[ix]  # should be an alias, not a copy
+        if this_action.action == 'load':
+            if this_action.sam_id not in loaded_samples:
+                loaded_samples.append(this_action.sam_id)
+        elif this_action.action == 'unload':
+            if this_action.sam_id not in unloaded_samples:
+                unloaded_samples.append(this_action.sam_id)
+
     iterations = 0
     hall_pass = len(exp_sequence) * 5
     ix = 2
     while ix < len(exp_sequence):
         iterations += 1
         if iterations > hall_pass:
-            print("WARNING: something is wrong, bailing out of prioritize_sequence while loop.")
+            print("WARNING: something is wrong, bailing out of while loop.")
             break  # emergency break out of while loop
         # iterate over list of actions, starting with the second action
         if ix < 2:
@@ -688,33 +729,33 @@ def swap_into_gaps(in_seq: List[ActClass]):
         gap_between = last_action.start - prev_action.end
 
         # print("ix is now:", ix)  # debug
+        if this_action.action == 'load':
+            if this_action.sam_id not in loaded_samples:
+                loaded_samples.append(this_action.sam_id)
+        elif this_action.action == 'unload':
+            if this_action.sam_id not in unloaded_samples:
+                unloaded_samples.append(this_action.sam_id)
 
-        if this_action.action == 'mix' and gap_between >= mix_time_s:
-            # print("===========================================================")
-            # print("Two before: ", prev_action)  # debug
-            # print("One before: ", last_action)  # debug
-            # print("This one: ", this_action)  # debug
-            # print("Gap is: ", gap_between)  # debug
-            this_action.change_start(prev_action.end)
-            # print("Changed this action: ", this_action)
-            # exp_sequence.sort(key=lambda sort_action: sort_action.start)
-            exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
-            exp_sequence = find_gaps(exp_sequence)
-            ix = ix - 1  # going back one , to check that this_action moved correctly
-        elif this_action.action == 'rinse' and gap_between >= rinse_time_s:
-            # print("===========================================================")
-            # print("Two before: ", prev_action)  # debug
-            # print("One before: ", last_action)  # debug
-            # print("This one: ", this_action)  # debug
-            # print("Gap is: ", gap_between)  # debug
-            this_action.change_start(prev_action.end)
-            # print("Changed this action: ", this_action)
-            # exp_sequence.sort(key=lambda sort_action: sort_action.start)
-            exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
-            exp_sequence = find_gaps(exp_sequence)
-            ix = ix - 1  # going back one , to check that this_action moved correctly
+        if this_action.action == 'mix':
+            if gap_between >= mix_time_s and this_action.sam_id in loaded_samples:
+                print("Moving ", this_action, " between ", prev_action, " and ", last_action)  # debug
+                this_action.change_start(prev_action.end)
+                exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
+                exp_sequence = find_gaps_compress_actions(exp_sequence)
+                ix = ix - 1  # going back one , to check that this_action moved correctly
+            else:
+                ix = ix + 1  # iterating forward
+        elif this_action.action == 'rinse':
+            if gap_between >= rinse_time_s and this_action.sam_id in unloaded_samples:
+                print("Moving ", this_action, " between ", prev_action, " and ", last_action)
+                this_action.change_start(prev_action.end)
+                exp_sequence = swap_actions(exp_sequence, ix, (ix - 1))
+                exp_sequence = find_gaps_compress_actions(exp_sequence)
+                ix = ix - 1  # going back one , to check that this_action moved correctly
+            else:
+                ix = ix + 1  # iterating forward
         else:
-            ix = ix + 1
+            ix = ix + 1  # iterating forward
 
     return exp_sequence
 
@@ -754,18 +795,23 @@ def create_exp_sequence(exp: ExperimentData):
         time_in_seq = time_in_seq + load_time_s  # shift the start time for next load by load_time
 
     # then, sort by the timestamp and prioritize the list by action type
+    print("=====================================================================================")
     exp_sequence = prioritize_sequence(exp_sequence, sam_indx_in_order)
     print("Concatenated, sorted, swapped sequence is: ")  # debug
     print(exp_sequence)  # debug
+    print("=====================================================================================")
     exp_sequence = shift_timestamp(exp_sequence, sam_indx_in_order)
     print("Concatenated, sorted, swapped, and shifted sequence is: ")  # debug
     print(exp_sequence)
+    print("=====================================================================================")
     print("Double checking sequence:")
     exp_sequence = shift_timestamp(exp_sequence, sam_indx_in_order)
     print(exp_sequence)
+    print("=====================================================================================")
     print("Compressing sequence")
-    exp_sequence = find_gaps(exp_sequence)
+    exp_sequence = find_gaps_compress_actions(exp_sequence)
     print(exp_sequence)
+    print("=====================================================================================")
     print("Shifting into gaps")
     exp_sequence = swap_into_gaps(exp_sequence)
     print(exp_sequence)
@@ -908,7 +954,7 @@ def config_samples(exp: ExperimentData):
                 num_wells_on_this_plate = num_wells_on_this_plate + 1
         # record the number of wells in each plate
         num_wells_all_plates[plate_index] = num_wells_on_this_plate
-        print("---------------------------------------------------------------")  # debug
+        print("===========================================================================================")  # debug
         f_out_string = "Sample plate " + str(plate_index) \
                        + " labeled " + plate_labels[plate_index] \
                        + " with " + str(num_wells_on_this_plate) \
@@ -918,7 +964,7 @@ def config_samples(exp: ExperimentData):
         plate_data_set = []  # each plate's list of SampleWell class
         for this_well_on_plate in range(num_wells_on_this_plate):
             # for each well on this plate
-            plate_data_set.append(SampleWell())  # appends object of SampleWell class to list
+            plate_data_set.append(SampleWellData())  # appends object of SampleWell class to list
             sample = plate_data_set[this_well_on_plate]
             this_sam_indx = all_on_prev_plates + this_well_on_plate
             sample.sam_indx = this_sam_indx
@@ -931,6 +977,12 @@ def config_samples(exp: ExperimentData):
             sample.targ_num_rinses = exp.sam_targ_num_rinses[this_sam_indx]
             sample.targ_num_mixes = exp.sam_targ_num_mixes[this_sam_indx]
             sample.targ_incub_time_m = exp.sam_targ_incub_times_min[this_sam_indx]
+            if sample.targ_incub_time_m > max_time_before_evap_m:
+                num_reload = int(sample.targ_incub_time_m/max_time_before_evap_m)
+                sample.targ_num_reload = num_reload
+                sample.targ_num_mixes = sample.targ_num_mixes - num_reload
+                if sample.targ_num_mixes < 0:
+                    sample.targ_num_mixes = 0
             sample.solution_location = exp.sam_inoculation_locations[this_sam_indx]
             sample.solution_index = res_locations.index(sample.solution_location)
             # sample.targ_incub_gap_time_m = exp.sample_targ_incub_gap_times_min[start_sam]
@@ -945,6 +997,12 @@ def config_samples(exp: ExperimentData):
                 sam_timestamp = sam_timestamp + gap_time
                 this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
                 exp_sequence.append(this_action)
+            # the timestamps for 'reload' will be resorted at the end
+            for i in range(sample.targ_num_reload):
+                gap_time = (i+1)*max_time_before_evap_m*60
+                # START HERE!  check that 'reload' sorts correctly
+                this_action = ActClass(this_sam_indx, 'reload', gap_time)
+                exp_sequence.append(this_action)
             sam_timestamp = targ_inc_time_s
             this_action = ActClass(this_sam_indx, 'unload', sam_timestamp)
             exp_sequence.append(this_action)
@@ -957,6 +1015,7 @@ def config_samples(exp: ExperimentData):
             # exp_sequence.append(this_action)
             sample.targ_act_seq = exp_sequence
             # debug block...
+            print("------------------------------------------------------------------------------------")  # debug
             f_out_string = "Sample name: " + str(sample.sample_name) + " indexed # " \
                            + str(this_sam_indx) + " on plate # " + str(plate_index) + " & well # " \
                            + str(this_well_on_plate) + " with sequence: "  # debug
@@ -988,11 +1047,11 @@ def user_config_exp():
     this_exp.slots_reservoirs = (1, 4, 5, 8, 7, 9)  # slots 1-11 on OT-2
     # xyz calibration offset for labware (in mm), check on OT-2 app
     this_exp.slot_offsets_res = ((-0.20, 2.10, -1.30),
-                                 (-0.20, 2.10, -1.30),
-                                 (-0.20, 2.10, -1.30),
-                                 (-0.20, 2.10, -1.30),
-                                 (-0.20, 2.10, -1.30),
-                                 (-0.20, 2.10, -1.30),)
+                                 (-1.00, -1.00, -0.80),
+                                 (-1.00, -1.00, -1.60),
+                                 (0.00, -2.00, -1.70),
+                                 (-1.00, 1.00, -0.70),
+                                 (-1.00, 0.00, -1.10),)
     # reservoir labware, eg:  res3_60mL_name, res4_32mL_name, res6_20mL_name, res6_40mL_name
     this_exp.res_plate_names = (this_exp.res3_60mL_name,
                                 this_exp.res3_60mL_name,
@@ -1000,15 +1059,8 @@ def user_config_exp():
                                 this_exp.res4_32mL_name,
                                 this_exp.res6_40mL_name,
                                 this_exp.res6_40mL_name)  # choose one for each slot
-
-    # starting reservoir volumes (1 mL = 1000 uL): list,
-    # can break to new line to distinguish plates
-    this_exp.res_starting_vols = [50000, 50000, 0,
-                                  50000, 50000, 0,
-                                  30000, 30000, 30000, 30000,
-                                  30000, 30000, 30000, 30000,
-                                  40000, 40000, 40000, 40000, 40000, 40000,
-                                  40000, 40000, 40000, 40000, 40000, 40000]
+    # List the indices of the reservoir plates (starting at zero for the first)
+    # break to a new line to distinguish plates
     this_exp.res_plate_indx_nums = (0, 0, 0,
                                     1, 1, 1,
                                     2, 2, 2, 2,
@@ -1021,27 +1073,8 @@ def user_config_exp():
                                    0, 1, 2, 3,
                                    0, 1, 2, 3, 4, 5,
                                    0, 1, 2, 3, 4, 5)  # zero-index of each well on plate (L=0,...,R=3)
-    this_exp.res_contents = ('DI_sol', 'Thiol_1_sol', 'Waste',
-                             'DI_sol', 'Thiol_2_sol', 'Waste',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol')  # contents of the reservoirs
-    this_exp.res_start_concent = (0.0, 2000.0, 0.0,
-                                  0.0, 2000.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,)  # uM (micromol/L
-    this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
-                                 0.0, 2000.0, 0.0,
-                                 1600.0, 1000.0, 800.0, 600.0,
-                                 1600.0, 1000.0, 800.0, 600.0,
-                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
-                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L
 
+    # List the locations of waste reservoir well and rinse/dilution reservoir wells
     this_exp.waste_res_loc = ((0, 2), (1, 2))  # list of locations (slot_indx, well_indx) for waste
     this_exp.rinse_res_loc = ((0, 0), (1, 0))  # list of locations (slot_indx, well_indx) for DI rinse
     this_exp.sol_res_loc = ((0, 1),
@@ -1051,10 +1084,42 @@ def user_config_exp():
                             (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5),
                             (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5))  # loc list (slot_indx, well_indx)
 
+    # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
+    this_exp.res_starting_vols = [50000, 50000, 0,
+                                  50000, 50000, 0,
+                                  30000, 30000, 30000, 30000,
+                                  30000, 30000, 30000, 30000,
+                                  40000, 40000, 40000, 40000, 40000, 40000,
+                                  40000, 40000, 40000, 40000, 40000, 40000]
+    # starting reservoir contents , list all: sol, rinse, waste
+    this_exp.res_contents = ('DI_sol', 'Thiol_1_sol', 'Waste',
+                             'DI_sol', 'Thiol_2_sol', 'Waste',
+                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
+                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
+                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
+                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
+                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
+                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol')  # contents of the reservoirs
+
+    this_exp.res_start_concent = (0.0, 2000.0, 0.0,
+                                  0.0, 2000.0, 0.0,
+                                  0.0, 0.0, 0.0, 0.0,
+                                  0.0, 0.0, 0.0, 0.0,
+                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,)  # uM (micromol/L)
+    this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
+                                 0.0, 2000.0, 0.0,
+                                 1600.0, 1000.0, 800.0, 600.0,
+                                 1600.0, 1000.0, 800.0, 600.0,
+                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
+                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L)
+
+
+
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
     # this_exp.slot_tip_rack_sm = (10, 11)  # slots 1-11 on OT-2
-    this_exp.slot_offsets_lg_tips = ((-1.10, 1.50, -0.10),
+    this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
                                      (-1.10, 1.50, -0.10))  # calibration offset for tips
     # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for tips
 
@@ -1138,7 +1203,7 @@ def run(protocol: protocol_api.ProtocolContext):
     def load_plates(slots, names, labels, offsets):
         plates: List[Labware] = []
         for xx in range(len(slots)):
-            # custom 3-well reservoir with 'A1', 'A2', 'A3' wells
+            # eg: custom 3-well reservoir with 'A1', 'A2', 'A3' wells
             this_slot = slots[xx]
             this_name = names[xx]
             this_label = labels[xx]
@@ -1158,7 +1223,7 @@ def run(protocol: protocol_api.ProtocolContext):
             res_array.append(new_res)
         return res_array
 
-    # set up experiment
+    # set up experiment, exp is global to run()
     exp: ExperimentData = user_config_exp()
     exp = config_samples(exp)
     exp.planned_sequence = create_exp_sequence(exp)
@@ -1197,9 +1262,9 @@ def run(protocol: protocol_api.ProtocolContext):
     reservoir_plates = load_plates(exp.slots_reservoirs, exp.res_plate_names,
                                    exp.labels_res_plates, exp.slot_offsets_res)
 
-    rinse_res = make_res_array(exp.rinse_res_loc)  # array of rinse well objects
-    waste_res = make_res_array(exp.waste_res_loc)  # array of waste well objects
-    sol_res = make_res_array(exp.sol_res_loc)  # array of solution well objects
+    rinse_res_arr = make_res_array(exp.rinse_res_loc)  # array of rinse well objects
+    waste_res_arr = make_res_array(exp.waste_res_loc)  # array of waste well objects
+    sol_res_arr = make_res_array(exp.sol_res_loc)  # array of solution well objects
 
     # START HERE: make these global variables?  modify with global keyword?
     # waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
@@ -1241,8 +1306,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 print("We have run out of rinse solution!")
                 print("Human input needed!")
                 raise StopExecution
-            rinse_well = rinse_res[exp.this_indx_rinse]  # Labware object for protocol use
-            # START HERE!! above is not a global function!
+            # local variable, define in run() instead
+            # rinse_well = rinse_res_arr[exp.this_indx_rinse]  # Labware object for protocol use
         return None
 
     def check_waste_full(well_data):
@@ -1253,8 +1318,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 print("No space left for waste collection!")
                 print("Human input needed!")
                 raise StopExecution
-            waste_well = waste_res[exp.this_indx_waste]  # Labware object for protocol use
-            # START HERE!! above is not a global function!
+            # local variable, define in run() instead
+            # waste_well = waste_res_arr[exp.this_indx_waste]  # Labware object for protocol use
         return None
 
     # MODIFY: add selection for tip position, and which pipette
@@ -1369,8 +1434,8 @@ def run(protocol: protocol_api.ProtocolContext):
 
             waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
             rinse_data = exp.rinse_data[exp.this_indx_rinse]  # choose rinse data_set (alias)
-            this_rinse = rinse_res[exp.this_indx_rinse]  # Labware well object for protocol use
-            this_waste = waste_res[exp.this_indx_waste]  # Labware well object for protocol use
+            this_rinse = rinse_res_arr[exp.this_indx_rinse]  # Labware well object for protocol use
+            this_waste = waste_res_arr[exp.this_indx_waste]  # Labware well object for protocol use
 
             goal_time = this_action.start - 10  # start action within 10 seconds of start/end time
             action_type = this_action.action
@@ -1386,32 +1451,37 @@ def run(protocol: protocol_api.ProtocolContext):
             # Case: unload  (1)
             if action_type == 'unload':
                 print("Unloading sample #: ", sample_id)  # debug
-
                 stamp = rinse_well(this_well, this_waste, waste_data, this_rinse, rinse_data)
                 sam_data.incub_end_timestmp = stamp
-            # Case: mix (2)
+            # Case: reload (2)
+            elif action_type == 'reload':
+                print("Reload sample #: ", sample_id)  # debug
+                # MODIFY: choose/swap pipette tips
+                exp.this_indx_solut = sam_data.solution_index  # change which solution is in use
+                this_res_data = exp.res_data[exp.this_indx_solut]  # choose solution data_set (alias)
+                this_solution = sol_res_arr[exp.this_indx_solut]  # Labware well object for protocol use
+                stamp = fill_mix_well(this_well, this_solution, this_res_data, this_waste, load_mixes)
+                check_res_empty(this_res_data)  # checking res-well volume
+                sam_data.incub_reload_timestmps.append(stamp)
+            # Case: mix (3)
             elif action_type == 'mix':
                 print("Mixing sample #: ", sample_id)  # debug
                 # MODIFY: choose/swap pipette tips
-                stamp = mix_well(this_well, 1)
+                stamp = mix_well(this_well, this_waste, 1)
                 sam_data.incub_mix_timestmps.append(stamp)
-            # Case: load (3)
+            # Case: load (4)
             elif action_type == 'load':
                 print("Loading sample #: ", sample_id)  # debug
                 # MODIFY: choose/swap pipette tips
                 exp.this_indx_solut = sam_data.solution_index  # change which solution is in use
                 this_res_data = exp.res_data[exp.this_indx_solut]  # choose solution data_set (alias)
-                this_solution = sol_res[exp.this_indx_solut]  # Labware well object for protocol use
+                this_solution = sol_res_arr[exp.this_indx_solut]  # Labware well object for protocol use
                 stamp = fill_mix_well(this_well, this_solution, this_res_data, this_waste, load_mixes)
                 check_res_empty(this_res_data)  # checking res-well volume
                 sam_data.incub_st_timestmp = stamp
-            # Case: rinse (4)
+            # Case: rinse (5)
             elif action_type == 'rinse':
                 print("Rinsing sample #: ", sample_id)
-                waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
-                rinse_data = exp.rinse_data[exp.this_indx_rinse]  # choose rinse data_set (alias)
-                this_rinse = rinse_res[exp.this_indx_rinse]  # Labware well object for protocol use
-                this_waste = waste_res[exp.this_indx_waste]  # Labware well object for protocol use
                 stamp = rinse_well(this_well, this_waste, waste_data, this_rinse, rinse_data)
                 sam_data.rinse_timestmps.append(stamp)
 
@@ -1423,6 +1493,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 sam_data = all_samples[plate_index][this_well_on_plate]  # alias for the sample data
                 sam_data.mixed_num = len(sam_data.incub_mix_timestmps)
                 sam_data.rinsed_num = len(sam_data.rinse_timestmps)
+                sam_data.reloaded_num = len(sam_data.incub_reload_timestmps)
                 sam_data.incub_tot_time_s = sam_data.incub_end_timestmp - sam_data.incub_st_timestmp
                 prev_stamp = sam_data.incub_st_timestmp
                 mix_time_gaps = []
@@ -1449,20 +1520,13 @@ def run(protocol: protocol_api.ProtocolContext):
     out_string = "Tip loaded: " + str(pipette_lg.has_tip) + "; Lights On: " + str(protocol.rail_lights_on)  # debug
     protocol.comment(out_string)  # debug
 
-    # fill wells, check timer
-    pipette_lg.move_to(rinse_res.top())
-    exp.now_timestmp = math.ceil(time.perf_counter())
+    # run experimental sequence
+    run_sequence()
 
-    # target_timestamp = start_time + targ_inc_times_min * 60
-    if timestamp_now < target_timestamp:
-        gap_time_sec = target_timestamp - timestamp_now
-        out_string = "Pausing for " + str(gap_time_sec) + " seconds"  # debug
-        protocol.comment(out_string)  # debug
-        protocol.delay(seconds=gap_time_sec)
     time_lapse = math.ceil(time.perf_counter() - exp.zero_timestmp)
     ct = datetime.datetime.now()
     out_string = "Ending Experimental Timer " + str(ct) + "TimeLapse (sec): " + str(time_lapse)  # debug
     protocol.comment(out_string)  # debug
-    protocol.set_rail_lights(True)
+    protocol.set_rail_lights(False)
     pipette_lg.return_tip()
     protocol.comment("Completed Experiment.")  # debug
