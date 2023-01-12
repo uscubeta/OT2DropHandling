@@ -26,7 +26,6 @@
 # To close experiment, save notebook, then Shutdown kernel and Quit
 
 
-
 # import json
 import time
 import math
@@ -236,7 +235,7 @@ class SampleWellData:
         self.incub_concen = 0  # uM (micromol/L) molarity of incubation solution
         self.incub_st_timestmp = 1208125  # start time collected @ time.perf_counter()
         self.incub_end_timestmp = 1208140  # end time collected @ time.perf_counter()
-        self.incub_reload_timestmps = []  #  eg:[1208225, 1208325, ]  # reload time collected @ time.perf_counter()
+        self.incub_reload_timestmps = []  # eg:[1208225, 1208325, ]  # reload time collected @ time.perf_counter()
         self.incub_mix_timestmps = []  # eg:[1208225, 1208325, ]  # mix time collected @ time.perf_counter()
         self.rinse_timestmps = []  # eg: [1208225, 1208325, ]  # rinse time collected @ time.perf_counter()
         self.incub_tot_time_s = 15  # integer, in seconds
@@ -561,6 +560,52 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
     return exp_sequence
 
 
+def find_when_action(action: str, exp_sequence: List[ActClass], act_pos: int):
+    # action = 'load', 'unload', etc...
+    if act_pos >= len(exp_sequence):
+        act_pos = len(exp_sequence) - 1
+    elif act_pos < 0:
+        act_pos = 0
+    find_action = exp_sequence[act_pos]
+    # print("This action is:", find_action) # debug
+    find_action_id = find_action.sam_id
+    when_action = 0
+    for ix in range(len(exp_sequence)):
+        this_action = exp_sequence[ix]  # should be an alias, not a copy
+        if this_action.action == action and this_action.sam_id == find_action_id:
+            when_action = ix
+            break
+    # print("This action is correlated with:", exp_sequence[when_action])  # debug
+    return when_action
+
+
+def find_gap_array(exp_sequence: List[ActClass], act_pos: int):
+    if act_pos >= len(exp_sequence):
+        act_pos = len(exp_sequence)
+    elif act_pos < 0:
+        act_pos = 0
+    gap_list = []  # need a new list since can go back to prev iteration
+    for subx in range(act_pos-1):
+        sub_act = exp_sequence[subx]
+        next_act = exp_sequence[subx + 1]
+        next_gap = next_act.start - sub_act.end
+        gap_list.append(next_gap)
+    return gap_list
+
+
+def find_next_gap(exp_sequence: List[ActClass], from_pos: int, to_pos: int):
+    which_gap = to_pos-1
+    this_action = exp_sequence[to_pos]  # should be an alias, not a copy
+    this_action_time = this_action.end - this_action.start
+    gaps_before_this = find_gap_array(exp_sequence, to_pos)
+    for ig in range(from_pos, len(gaps_before_this)):
+        gap = gaps_before_this[ig]
+        if gap >= this_action_time:
+            which_gap = ig
+            break
+    return which_gap
+
+
 def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
     # next, iterate over the sorted list and shift all except unload
     # shift the action if the previous one has a timestamp that
@@ -690,6 +735,7 @@ def find_gaps_compress_actions(in_seq: List[ActClass]):
         this_action = exp_sequence[ix]  # should be an alias, not a copy
         if this_action.action == 'mix' or this_action.action == 'rinse':
             # only shifting mix and rinse actions, NOT load/unload/reload
+            # MODIFY: give user option not to shift mix too early?
             old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
             if this_action.start > old_action.end:
                 # print("Changing action: ", this_action)  # debug
@@ -697,11 +743,10 @@ def find_gaps_compress_actions(in_seq: List[ActClass]):
     return exp_sequence
 
 
-def swap_into_gaps(in_seq: List[ActClass]):
+def swap_into_gaps(in_seq: List[ActClass], sam_indx: Tuple[int]):
     # Check the gaps between two actions and see if the following
     # action can be swapped into the gap
     exp_sequence = deepcopy(in_seq)
-
     iterations = 0
     hall_pass = len(exp_sequence) * 5
     iter_ix = 2
@@ -714,46 +759,26 @@ def swap_into_gaps(in_seq: List[ActClass]):
         if iter_ix < 2:
             iter_ix = 2  # if accidentally went back to the first
 
-        last_action = exp_sequence[(iter_ix - 1)]  # should be an alias, not a copy
-        prev_action = exp_sequence[(iter_ix - 2)]  # should be an alias, not a copy
+        print("ix is now:", iter_ix)  # debug
         this_action = exp_sequence[iter_ix]  # should be an alias, not a copy
-        gap_between = last_action.start - prev_action.end
-
-        # print("ix is now:", ix)  # debug
-        loaded_samples = []  # need a new list since can go back to prev iteration
-        unloaded_samples = []  # need a new list since can go back to prev iteration
-        # START HERE: (I think I fixed the bug.)
-        for subx in range(iter_ix - 1):
-            sub_act = exp_sequence[subx]
-            if sub_act.action == 'load':
-                if sub_act.sam_id not in loaded_samples:
-                    loaded_samples.append(sub_act.sam_id)
-            elif sub_act.action == 'unload':
-                if sub_act.sam_id not in unloaded_samples:
-                    unloaded_samples.append(sub_act.sam_id)
-
+        which_gap = iter_ix - 1
+        prev = which_gap
         if this_action.action == 'mix':
-            if gap_between >= mix_time_s and this_action.sam_id in loaded_samples:
-                print("ix:", iter_ix, "Moving ", this_action, " between ", prev_action, " and ", last_action)  # debug
-                print("Loaded samples: ", loaded_samples)  # debug
-                this_action.change_start(prev_action.end)
-                exp_sequence = swap_actions(exp_sequence, iter_ix, (iter_ix - 1))
-                exp_sequence = find_gaps_compress_actions(exp_sequence)
-                iter_ix = iter_ix - 2  # going back two, to check that this_action moved correctly
-            else:
-                iter_ix = iter_ix + 1  # iterating forward
+            when_loaded = find_when_action('load', exp_sequence, iter_ix)
+            which_gap = find_next_gap(exp_sequence, when_loaded, iter_ix)
         elif this_action.action == 'rinse':
-            if gap_between >= rinse_time_s and this_action.sam_id in unloaded_samples:
-                print("ix:", iter_ix, "Moving ", this_action, " between ", prev_action, " and ", last_action)
-                print("Unloaded samples: ", unloaded_samples)  # debug
-                this_action.change_start(prev_action.end)
-                exp_sequence = swap_actions(exp_sequence, iter_ix, (iter_ix - 1))
-                exp_sequence = find_gaps_compress_actions(exp_sequence)
-                iter_ix = iter_ix - 2  # going back two, to check that this_action moved correctly
-            else:
-                iter_ix = iter_ix + 1  # iterating forward
+            when_unloaded = find_when_action('unload', exp_sequence, iter_ix)
+            which_gap = find_next_gap(exp_sequence, when_unloaded, iter_ix)
+
+        if which_gap < (prev):
+            last_action = exp_sequence[which_gap]  # should be an alias, not a copy
+            print("ix:", iter_ix, "Moving ", this_action, " after ", last_action)  # debug
+            this_action.change_start(last_action.end)
+            exp_sequence = prioritize_sequence(exp_sequence, sam_indx)
+            exp_sequence = find_gaps_compress_actions(exp_sequence)
+            iter_ix = iter_ix - 2  # going back two, to check that this_action moved correctly
         else:
-            iter_ix = iter_ix + 1  # iterating forward
+            iter_ix = iter_ix + 1  # iterating forward for 'load', 'reload' and 'unload'
 
     return exp_sequence
 
@@ -811,7 +836,15 @@ def create_exp_sequence(exp: ExperimentData):
     print(exp_sequence)
     print("=====================================================================================")
     print("Shifting into gaps")
-    exp_sequence = swap_into_gaps(exp_sequence)
+    exp_sequence = swap_into_gaps(exp_sequence, sam_indx_in_order)
+    print(exp_sequence)
+    print("=====================================================================================")
+    print("Compressing sequence")
+    exp_sequence = find_gaps_compress_actions(exp_sequence)
+    print(exp_sequence)
+    print("=====================================================================================")
+    print("Triple checking sequence:")
+    exp_sequence = shift_timestamp(exp_sequence, sam_indx_in_order)
     print(exp_sequence)
 
     return exp_sequence
@@ -976,7 +1009,7 @@ def config_samples(exp: ExperimentData):
             sample.targ_num_mixes = exp.sam_targ_num_mixes[this_sam_indx]
             sample.targ_incub_time_m = exp.sam_targ_incub_times_min[this_sam_indx]
             if sample.targ_incub_time_m > max_time_before_evap_m:
-                num_reload = int(sample.targ_incub_time_m/max_time_before_evap_m)
+                num_reload = int(sample.targ_incub_time_m / max_time_before_evap_m)
                 sample.targ_num_reload = num_reload
                 sample.targ_num_mixes = sample.targ_num_mixes - num_reload
                 if sample.targ_num_mixes < 0:
@@ -997,7 +1030,7 @@ def config_samples(exp: ExperimentData):
                 exp_sequence.append(this_action)
             # the timestamps for 'reload' will be resorted at the end
             for i in range(sample.targ_num_reload):
-                gap_time = (i+1)*max_time_before_evap_m*60
+                gap_time = (i + 1) * max_time_before_evap_m * 60
                 # START HERE!  check that 'reload' sorts correctly
                 this_action = ActClass(this_sam_indx, 'reload', gap_time)
                 exp_sequence.append(this_action)
@@ -1111,8 +1144,6 @@ def user_config_exp():
                                  1600.0, 1000.0, 800.0, 600.0,
                                  400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
                                  400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L)
-
-
 
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
