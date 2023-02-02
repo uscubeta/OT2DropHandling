@@ -363,12 +363,12 @@ def user_config_exp():
                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0)  # uM (micromol/L)
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (7, 8)  # slots 1-11 on OT-2
-    this_exp.slot_tiprack_sm = (9, 6)  # slots 1-11 on OT-2
+    this_exp.slots_tiprack_sm = (9, 6)  # slots 1-11 on OT-2
     this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
                                      (-1.10, 1.50, -0.10))  # calibration offset for tips
     this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),
                                      (-1.10, 1.50, -0.10))  # calibration offset for tips
-    this_exp.tips_in_racks = [[*range(0, 86, 1)], [*range(0, 86, 1)]]  # nested list,
+    this_exp.tips_in_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
     # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85 for a full set of tips!
     # list of sam_plates corresponds to index of plates 0,1,2,... (num_plates-1)
     this_exp.slots_sam_plates = (2, 3)  # slots 1-11 on OT-2 for the plates (indexed 0,1,2...)
