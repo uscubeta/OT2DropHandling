@@ -202,7 +202,8 @@ def run(protocol: protocol_api.ProtocolContext):
             # raise StopExecution
 
         # LOCAL VARIABLE - how to change global variable instead?
-        pipette.return_tip(home_after=True)  # return last tip to its rack  (not discarded)
+        if pipette.has_tip:
+            pipette.return_tip(home_after=True)  # return last tip to its rack  (not discarded)
         pipette.pick_up_tip(which_rack.wells()[which_tipwell])  # pick up selected tip from chosen rack
         pipette.home()  # homes pipette ONLY, NOT XYZ
 

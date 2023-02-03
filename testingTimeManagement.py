@@ -368,6 +368,9 @@ class ResWell:
         self.plate_indx_num = 0
         self.well_indx_num = 0
         self.loc = (0, 0)
+        self.parent_sol_loc = (0, 0)
+        self.parent_conc = 0.0
+        self.dilution_complete = True
         self.assigned_tip = 0
 
     # returns this when calling this object
@@ -944,6 +947,7 @@ def config_samples(exp: ExperimentData):
         # protocol.comment(f_out_string)  # debug for OT2 app
 
     # select the first tip
+    # MODIFY: tips_in_lg_racks
     first_tip = min(exp.tips_in_racks[0])  # min of tips in first rack
     current_tip_loc = (0, first_tip)  # first tip location
 
@@ -995,16 +999,46 @@ def config_samples(exp: ExperimentData):
             elif this_loc in exp.rinse_res_loc:
                 rinse_set.append(new_res)
             elif this_loc in exp.sol_res_loc:
+                goal_con = exp.res_goal_concent[this_res_indx]
+                start_con = exp.res_start_concent[this_res_indx]
+                if start_con < goal_con:
+                    # checking that the starting concentration is at goal concentration
+                    new_res.dilution_complete = False
+                    same_contents = []
+                    concentrations = []
+                    possible_parent_conc = []
+                    possible_parent_ids = []
+                    for each in range(exp.num_res_tot):
+                        # looping through all reservoirs to find ones with the same contents
+                        if exp.res_contents[each] == new_res.contents:
+                            same_contents.append(each)  # subset of indices from 0 to num_res_tot-1
+                            concentrations.append(exp.res_goal_concent[each])  # list of final concentrations
+                    for each in range(len(same_contents)):
+                        # looping through subset list the reservoirs with the same contents
+                        if concentrations[each] > goal_con:
+                            # making list of those with higher concentration
+                            possible_parent_conc.append(concentrations[each])
+                            possible_parent_ids.append(same_contents[each])
+                    min_conc = min(possible_parent_conc)  # minimum of possible parent for serial dilution
+                    # MODIFY: if two or more with the same concentration, may need to change
+                    min_index = possible_parent_conc.index(min_conc)  # index from the subset list, not main list
+                    parent_res_index = possible_parent_ids[min_index]  # 0 to num_res_tot-1, in the order written in user_config_exp
+                    new_res.parent_sol_loc = (exp.res_plate_indx_nums[parent_res_index], exp.res_well_indx_nums[parent_res_index])
+                    new_res.parent_conc = exp.res_goal_concent[parent_res_index]
+                    # MODIFY: the order of dilution will matter here, dilute in order of max concentrations first
                 res_set.append(new_res)  # this order may be out of sync with sol_res_loc
                 res_locations.append(this_loc)  # list of the same order as res_set data
+
         all_on_prev_plates = all_on_prev_plates + num_wells_on_this_plate
     exp.num_wells_res_plates = tuple(num_wells_all_plates)  # record as a tuple, no mods
     exp.labels_res_plates = tuple(plate_labels)
     exp.res_data_locs = tuple(res_locations)
     exp.tips_used = tip_ids  # list of tuples [(rack, well), ...]
-    exp.res_data = res_set
     exp.waste_data = waste_set
     exp.rinse_data = rinse_set
+    exp.res_data = res_set
+    # START HERE: create a series of steps to perform the dilutions for the res_data!
+
 
     # second, find the order of SAMPLE incubation:
     # sort by the length of incubation time to produce index of wells in time-order
@@ -1499,6 +1533,7 @@ def run(protocol: protocol_api.ProtocolContext):
         return timestamp_now
 
     def swap_tips(position: (int, int)):
+        # START HERE: update from TestingTipSwitching.py
         # swap tips for the pipette,
         # if using different tips for diff solutions
         # MODIFY, add pipette variable and tiprack variable
