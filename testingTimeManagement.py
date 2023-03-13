@@ -56,6 +56,7 @@ start_time = 30  # seconds, when first action will run
 load_mixes = 3  # number of times to mix when loading
 # if incubation time exceeds this, will reload with fresh solution
 max_time_before_evap_m = 45  # minutes
+DO_DEBUG = True
 
 
 # MODIFY: move these class objects and functions to a different file and import
@@ -92,6 +93,7 @@ class ExperimentData:
         self.slots_tiprack_sm = ()  # small tip rack slots, eg: (10, 11)
         self.which_rack = 0
         self.which_tip = 0
+        self.last_tip_loc = (0, 0)  # last tip location "used" in plan
 
         # labels for labware
         self.labels_res_plates = ('label',)
@@ -113,6 +115,9 @@ class ExperimentData:
         self.waste_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
         self.rinse_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
         self.sol_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
+        self.waste_indx = (0,)  # list of indices (subset) from all reservoirs in res_data
+        self.rinse_indx = (0,)
+        self.sol_indx = (0,)
         # number of each set
         self.max_num_waste = 0
         self.max_num_rinse = 0
@@ -125,10 +130,16 @@ class ExperimentData:
         # reservoir info
         self.res_plate_names = ('labware_name',)  # list of plate names
         # self.res_plate_labels = ('labware_label',)  # replicate of above variable
-        self.res_starting_vols = [10000, 10000, 0]  # current volumes for reservoirs
+        self.res_start_vols = [10000, 10000, 0]  # current volumes for reservoirs
+        self.res_goal_vols = [10000, 10000, 0]  # final volumes for reservoirs
         self.res_contents = ('sol1', 'sol2', 'waste')  # contents of the reservoirs
         self.res_start_concent = (0.0, 0.0, 0.0)  # uM (micromol/L)
         self.res_goal_concent = (0.0, 0.0, 0.0)  # uM (micromol/L)
+        self.do_dilutions = False
+        self.num_cont_types = 0
+        self.rev_dil_order = []
+        self.forward_dil_or = []
+        self.res_ids = []  # same order as res_data, correlates to the input (subset from zero to num_res_tot)
 
         # sample info
         self.sam_plate_names = ('labware_name',)  # list of plate names
@@ -173,11 +184,10 @@ class ExperimentData:
         self.pipette_sm_loc = 'right'
         self.planned_sequence: list[ActClass] = []  # in seconds
         self.pln_seq_stamps: list[ActClass] = []  # in seconds
+        self.pln_dilut_seq: list[ActClass] = []  # in seconds
         # where each tuple is (sample_index, action, start_time_s, end_time_s)
         # eg: [(0, 'load', 10, 20), (0, 'mix', 110, 120), (0, 'mix', 210, 220), (0, 'rinse', 310, 320)]
         self.all_samples: list[list[SampleWellData]] = []
-        self.waste_data: list[ResWell] = []
-        self.rinse_data: list[ResWell] = []
         self.res_data: list[ResWell] = []
         self.res_data_locs: ((0, 0),)  # tuple of locations, same order as res_data
 
@@ -208,6 +218,7 @@ class ExperimentData:
             new_rack = current_rack
             new_tip = current_tip
         new_tip_loc = (new_rack, new_tip)
+        self.last_tip_loc = new_tip_loc
         return new_tip_loc
 
     def find_max_res_vol(self, this_name: str):
@@ -363,7 +374,9 @@ class ResWell:
     def __init__(self):
         self.contents = ''  # solution name/chemical name
         self.concentration = 0.0  # uM (micromol/L) # used for dilutions
+        self.goal_conc = 0.0  # uM (micromol/L) # used for dilutions
         self.curr_vol = 0  # uL
+        self.goal_vol = 0  # uL
         self.max_vol = 10000  # uL
         self.plate_indx_num = 0
         self.well_indx_num = 0
@@ -372,6 +385,7 @@ class ResWell:
         self.parent_conc = 0.0
         self.dilution_complete = True
         self.assigned_tip = 0
+        self.original_indx = 0
 
     # returns this when calling this object
     def __repr__(self):
@@ -915,11 +929,17 @@ def give_list_order(some_list: Tuple[int]):
     return sorted_tuple
 
 
-# used after user_config_exp
-def config_samples(exp: ExperimentData):
-    # This function checks the number of plates & samples in configuration
-    # both modifies exp variables and replaces all_samples in exp
-    # (list of lists of objects of class SampleWell !)
+# recursive reverse the list function
+def reverse_the_list(t):
+    # condition checking
+    if len(t) == 0:
+        return t
+    else:
+        return (t[-1],) + reverse_the_list(t[:-1])
+
+
+def calc_nums_exp(exp: ExperimentData):
+    # calculate the total number from user data provided in user_config_exp
     exp.num_samples = len(exp.sam_plate_indx_nums)
     exp.num_sam_plates = len(exp.slots_sam_plates)
     exp.num_lg_tipracks = len(exp.slots_tiprack_lg)
@@ -929,14 +949,17 @@ def config_samples(exp: ExperimentData):
     exp.max_num_rinse = len(exp.rinse_res_loc)
     exp.max_num_waste = len(exp.waste_res_loc)
     exp.max_num_solut = len(exp.sol_res_loc)
+    return exp
 
-    max_incub = max(exp.sam_targ_incub_times_min)
 
+def check_config_exp(exp: ExperimentData):
     # check that the number of items in user_config_experiment is consistent
+    # add command to STOP the rest of the program
     num_sam = exp.num_samples
     if len(exp.sam_names) != num_sam or \
             len(exp.sam_targ_incub_times_min) != num_sam or \
-            len(exp.sam_targ_num_rinses) != num_sam:
+            len(exp.sam_targ_num_rinses) != num_sam or \
+            len(exp.res_start_concent) != len(exp.res_goal_concent):
         f_out_string = "Something is off. Please check user_config_experiment()"
         print(f_out_string)  # debug for notebook
         # protocol.pause(f_out_string)  # debug for OT2 app
@@ -945,22 +968,27 @@ def config_samples(exp: ExperimentData):
         f_out_string = "The user_config_experiment() was written correctly. "
         print(f_out_string)  # debug for notebook
         # protocol.comment(f_out_string)  # debug for OT2 app
+    return None
 
+
+def set_up_res_data(exp: ExperimentData):
     # select the first tip
     # MODIFY: tips_in_lg_racks
     first_tip = min(exp.tips_in_racks[0])  # min of tips in first rack
     current_tip_loc = (0, first_tip)  # first tip location
+    print("Selecting tips")
 
     # first, set up data for RESERVOIRS (solutions, waste, rinse)
-    res_locations = []
-    tip_ids = []
-    res_set = []  # list of ResWell objects (not nested)
-    waste_set = []  # list of ResWell objects (not nested)
-    rinse_set = []  # list of ResWell objects (not nested)
+    waste_ids = []  # indices for waste reservoirs (subset from 0 to num_res_tot)
+    rinse_ids = []  # indices for rinse reservoirs (subset from 0 to num_res_tot)
+    sol_ids = []  # indices for solution reservoirs (subset from 0 to num_res_tot)
+    tip_ids = []  # index of tips already 'used'
+    res_set = []  # list of ResWell objects (not nested), includes waste and rinse
+
     num_plates = exp.num_res_plates
-    plate_labels = ['label'] * num_plates
+    plate_labels = ['label'] * num_plates  # placeholder for labels to be used in OT2 labware object
     num_wells_all_plates = [0] * num_plates  # placeholder for list of num_wells in each plate
-    max_volumes = [0.0] * num_plates
+    max_volumes = [0.0] * num_plates  # placeholder for list of maximum volumes in reservoirs
     all_on_prev_plates = 0  # for sample_index from 0 to num_res-1
     for plate_index in range(num_plates):
         # for each plate in on the deck, indexed 0 to num_plates-1
@@ -978,67 +1006,177 @@ def config_samples(exp: ExperimentData):
                        + " indexed " + str(plate_index) + " has " + str(num_wells_on_this_plate) \
                        + " wells with max vol " + str(max_volumes[plate_index])  # debug
         print(f_out_string)  # debug
+        # make (single) list of ResWell objects
         for this_well_on_plate in range(num_wells_on_this_plate):
             # for each well on this plate
-            this_res_indx = all_on_prev_plates + this_well_on_plate
-            new_res = ResWell()
-            pt_indx_num = exp.res_plate_indx_nums[this_res_indx]
-            wl_indx_num = exp.res_well_indx_nums[this_res_indx]
+            this_res_indx = all_on_prev_plates + this_well_on_plate  # index from exp.res_contents
+            new_res = ResWell()  # new ResWell object
+            new_res.original_indx = this_res_indx  # corresponds to original indices from exp.res_contents
+            pt_indx_num = exp.res_plate_indx_nums[this_res_indx]  # same index as exp.res_plate_indx_nums
+            wl_indx_num = exp.res_well_indx_nums[this_res_indx]  # same index as exp.res_well_indx_nums
             this_loc = (pt_indx_num, wl_indx_num)
             new_res.plate_indx_num = pt_indx_num
             new_res.well_indx_num = wl_indx_num
             new_res.loc = this_loc
             new_res.max_vol = max_volumes[plate_index]
-            new_res.curr_vol = exp.res_starting_vols[this_res_indx]
+            new_res.curr_vol = exp.res_start_vols[this_res_indx]
+            new_res.goal_vol = exp.res_goal_vols[this_res_indx]
             new_res.contents = exp.res_contents[this_res_indx]
+            new_res.goal_conc = exp.res_goal_concent[this_res_indx]
+            # assign first num_res_tot, replace if diluting
             new_res.assigned_tip = current_tip_loc  # tuple (rack, well)
             current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
             tip_ids.append(this_res_indx)  # using the res index as tip index (first set)
+            res_set.append(new_res)  # this order may be out of sync with sol_res_loc
             if this_loc in exp.waste_res_loc:
-                waste_set.append(new_res)
+                waste_ids.append(this_res_indx)
             elif this_loc in exp.rinse_res_loc:
-                rinse_set.append(new_res)
+                rinse_ids.append(this_res_indx)
             elif this_loc in exp.sol_res_loc:
-                goal_con = exp.res_goal_concent[this_res_indx]
-                start_con = exp.res_start_concent[this_res_indx]
-                if start_con < goal_con:
-                    # checking that the starting concentration is at goal concentration
-                    new_res.dilution_complete = False
-                    same_contents = []
-                    concentrations = []
-                    possible_parent_conc = []
-                    possible_parent_ids = []
-                    for each in range(exp.num_res_tot):
-                        # looping through all reservoirs to find ones with the same contents
-                        if exp.res_contents[each] == new_res.contents:
-                            same_contents.append(each)  # subset of indices from 0 to num_res_tot-1
-                            concentrations.append(exp.res_goal_concent[each])  # list of final concentrations
-                    for each in range(len(same_contents)):
-                        # looping through subset list the reservoirs with the same contents
-                        if concentrations[each] > goal_con:
-                            # making list of those with higher concentration
-                            possible_parent_conc.append(concentrations[each])
-                            possible_parent_ids.append(same_contents[each])
-                    min_conc = min(possible_parent_conc)  # minimum of possible parent for serial dilution
-                    # MODIFY: if two or more with the same concentration, may need to change
-                    min_index = possible_parent_conc.index(min_conc)  # index from the subset list, not main list
-                    parent_res_index = possible_parent_ids[min_index]  # 0 to num_res_tot-1, in the order written in user_config_exp
-                    new_res.parent_sol_loc = (exp.res_plate_indx_nums[parent_res_index], exp.res_well_indx_nums[parent_res_index])
-                    new_res.parent_conc = exp.res_goal_concent[parent_res_index]
-                    # MODIFY: the order of dilution will matter here, dilute in order of max concentrations first
-                res_set.append(new_res)  # this order may be out of sync with sol_res_loc
-                res_locations.append(this_loc)  # list of the same order as res_set data
-
+                sol_ids.append(this_res_indx)
         all_on_prev_plates = all_on_prev_plates + num_wells_on_this_plate
     exp.num_wells_res_plates = tuple(num_wells_all_plates)  # record as a tuple, no mods
     exp.labels_res_plates = tuple(plate_labels)
-    exp.res_data_locs = tuple(res_locations)
+    exp.waste_indx = tuple(waste_ids)
+    exp.rinse_indx = tuple(rinse_ids)
+    exp.sol_indx = tuple(sol_ids)
     exp.tips_used = tip_ids  # list of tuples [(rack, well), ...]
-    exp.waste_data = waste_set
-    exp.rinse_data = rinse_set
-    exp.res_data = res_set
-    # START HERE: create a series of steps to perform the dilutions for the res_data!
+    exp.res_data = res_set  # data for subset of original reservoir set
 
+    return exp
+
+
+def plan_dil_series(exp: ExperimentData):
+    # second, plan dilution series:
+    # if exp.res_start_concent != exp.res_goal_concent:
+    # need to plan a dilution series:
+
+    exp.do_dilutions = True
+
+    # res_dil_order = []  # keep or trash?
+    # planned_dilut_seq = []  # keep or trash?
+    sam_timestamp = 0
+
+    content_types = []
+    for each in range(exp.num_res_tot):
+        # print("Checking reservoir: ", each) # debug
+        # looping through all reservoirs to find ones with the same contents
+        new_cont = exp.res_contents[each]
+        if new_cont not in content_types:
+            if new_cont != 'Waste' and new_cont != 'DI_sol':
+                print("adding a new type:", exp.res_contents[each])
+                content_types.append(exp.res_contents[each])
+    exp.num_cont_types = len(content_types)
+
+    for this_type in content_types:
+        # which_res = []
+        # which_locs = []
+        # start_conc = []
+        # goal_conc = []
+        # start_vols = []
+        # goal_vols = []
+        for each in range(exp.num_res_tot):
+            print(exp.res_contents[each])  # debug
+            if exp.res_contents[each] == this_type:
+                # make a subset of reservoirs that fit this_type
+                # excludes 'Waste' and 'DI_sol'
+                # res_loc = (exp.res_plate_indx_nums[each],
+                #            exp.res_well_indx_nums[each])
+                # which_locs.append(res_loc)
+                # which_res.append(each)  # subset of reservoir indices (delete? too many different indices)
+                # start_conc.append(exp.res_start_concent[each])
+                # goal_conc.append(exp.res_goal_concent[each])  # new indices for this subset
+                # # list of goal concentrations in order they appear
+                # start_vols.append(exp.res_start_vols[each])
+                # goal_vols.append(exp.res_goal_vols[each])
+        # map goal_concentration to an integer, then sort that list in reverse order,
+        # returning the index of the ordered subset list (does NOT correspond to original indices)
+        rev_dil_order = give_list_order(tuple(map(int, goal_conc)))
+        forward_dil_or = reverse_the_list(rev_dil_order)
+        # convert to
+        exp.rev_dil_order = rev_dil_order
+        exp.forward_dil_or = forward_dil_or
+        # res_dil_order.append(rev_dil_order)  # from new set of indices (SUBSET)
+        if DO_DEBUG:
+            print("_______________________________________________________")
+            print("For content type: ", this_type)  # debug
+            print("With reservoirs:", which_res, "subset of reservoir indices")  # debug
+            print("With locations:", which_locs)  # debug
+            print("Start concentration: ", start_conc)  # debug
+            print("Goal concentration: ", goal_conc)  # debug
+            print("Start volumes: ", start_vols)  # debug
+            print("Goal volumes: ", goal_vols)  # debug
+            print("New res order is: ", rev_dil_order, " indices for the SUBSET, not original reservoir list")
+        for each_res in range(len(rev_dil_order)):
+            res_ind = rev_dil_order[each_res]  # indices for the SUBSET
+            some_res = which_res[res_ind]  # index for the original list, exp.res_contents
+            its_loc = which_locs[res_ind]  # location from the original list
+            its_goal_con = goal_conc[res_ind]
+            its_start_con = start_conc[res_ind]
+            if DO_DEBUG:
+                print("some_res is ", some_res, " with loc: ", its_loc)  # debug
+                print("goal: ", its_goal_con, " started with: ", its_start_con)  # debug
+            if its_start_con < its_goal_con and each_res > 0:
+                its_goal_vol = goal_vols[res_ind]
+                prev_ind = rev_dil_order[each_res - 1]
+                prev_conc = goal_conc[prev_ind]
+                prev_loc = which_locs[prev_ind]
+                transf_vol = round((its_goal_con / prev_conc * its_goal_vol), 2)
+                add_water = round((its_goal_vol - transf_vol), 2)
+                tran_mod = round((transf_vol % 100), 2)  # need to round to 100 uL
+                if tran_mod > 0:
+                    print("use a diff dilution parent, pipette cannot transfer: ", tran_mod)  # debug
+                    if each_res < 2:
+                        print("Cannot transfer from different dilution parent.")  # debug
+                    else:
+                        prev_ind = rev_dil_order[each_res - 2]
+                        prev_conc = goal_conc[prev_ind]
+                        prev_loc = which_locs[prev_ind]
+                        transf_vol = round((its_goal_con / prev_conc * its_goal_vol), 2)  # need to round to 100 uL
+                        add_water = round((its_goal_vol - transf_vol), 2)
+                        tran_mod = round((transf_vol % 100), 2)
+                        if tran_mod > 0:
+                            print("use a diff dilution parent, pipette cannot transfer: ", tran_mod)  # debug
+                print("Do a dilution for ", its_loc, ", transfer: ", transf_vol, "uL from ", prev_loc,
+                      " and dilute with ", add_water, "uL water")  # debug
+                for each in exp.res_data:
+                    if each.loc == its_loc:
+                        each.parent_sol_loc = prev_loc
+                        each.parent_conc = prev_conc
+                    if each.loc == prev_loc:
+                        each.goal_vol = each.goal_vol + transf_vol
+                # print("Select ResWell from exp.res_data")
+                # find which of res_ids value equals some_res,
+                for each_data in range(len(exp.res_data)):
+                    this_data = exp.res_data[each_data]
+                    print("each_data: ", each_data, "ResWell location: ", this_data.loc)  # debug
+                print("Add actions: transfer, dilute, mix.")  # debug
+                this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
+                this_action.change_tip(sample.which_tip_loc)  # load tip
+            # START HERE: keep track of the order (when tracking subsets)
+        exp.res_dil_order = res_dil_order
+    print(exp.num_cont_types)
+    return exp
+
+
+# used after user_config_exp
+def config_samples(exp: ExperimentData):
+    # This function checks the number of plates & samples in configuration
+    # both modifies exp variables and replaces all_samples in exp
+    # (list of lists of objects of class SampleWell !)
+    # MODIFY description of components
+
+    exp = calc_nums_exp(exp)  # calc the totals in exp
+    check_config_exp(exp)
+    exp = set_up_res_data(exp)  # first, set up data for reservoirs
+    if exp.res_start_concent != exp.res_goal_concent:
+        print("Do dilutions")  # debug
+        exp = plan_dil_series(exp)  # second, plan dilution series
+
+
+
+    this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
+    this_action.change_tip(sample.which_tip_loc)  # load tip
 
     # second, find the order of SAMPLE incubation:
     # sort by the length of incubation time to produce index of wells in time-order
@@ -1059,6 +1197,7 @@ def config_samples(exp: ExperimentData):
     plate_labels = ['label'] * num_plates
     num_wells_all_plates = [0] * num_plates  # placeholder for list of num_wells in each plate
     all_on_prev_plates = 0  # for sample_index from 0 to num_res-1
+    max_incub = max(exp.sam_targ_incub_times_min)  # find the maximum incubation time
     for plate_index in range(num_plates):
         # for each plate in on the deck, indexed 0 to num_plates-1
         plate_name = exp.sam_plate_names[plate_index]
@@ -1217,13 +1356,6 @@ def user_config_exp():
                             (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5),
                             (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5))  # loc list (slot_indx, well_indx)
 
-    # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
-    this_exp.res_starting_vols = [50000, 50000, 0,
-                                  50000, 50000, 0,
-                                  30000, 30000, 30000, 30000,
-                                  30000, 30000, 30000, 30000,
-                                  40000, 40000, 40000, 40000, 40000, 40000,
-                                  40000, 40000, 40000, 40000, 40000, 40000]
     # starting reservoir contents , list all: sol, rinse, waste
     this_exp.res_contents = ('DI_sol', 'Thiol_1_sol', 'Waste',
                              'DI_sol', 'Thiol_2_sol', 'Waste',
@@ -1240,13 +1372,32 @@ def user_config_exp():
                                   0.0, 0.0, 0.0, 0.0,
                                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0,)  # uM (micromol/L)
+    # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
+    this_exp.res_start_vols = [50000, 50000, 0,
+                               50000, 50000, 0,
+                               0, 0, 0, 0,
+                               0, 0, 0, 0,
+                               0, 0, 0, 0, 0, 0,
+                               0, 0, 0, 0, 0, 0]
+    this_exp.res_goal_vols = [50000, 50000, 0,
+                              50000, 50000, 0,
+                              6000, 6000, 6000, 6000,
+                              6000, 6000, 6000, 6000,
+                              5000, 5000, 5000, 5000, 5000, 5000,
+                              5000, 5000, 5000, 5000, 5000, 5000]
+    # MODIFY:  may need to estimate and then check if enough volume
+    # this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
+    #                             0.0, 2000.0, 0.0,
+    #                             1600.0, 1000.0, 800.0, 600.0,
+    #                             1600.0, 1000.0, 800.0, 600.0,
+    #                             400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
+    #                             400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L)
     this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
                                  0.0, 2000.0, 0.0,
                                  1600.0, 1000.0, 800.0, 600.0,
                                  1600.0, 1000.0, 800.0, 600.0,
-                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
-                                 400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L)
-
+                                 10.0, 50.0, 100.0, 200.0, 300.0, 400.0,
+                                 10.0, 50.0, 100.0, 200.0, 300.0, 400.0)  # uM (micromol/L)
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
     this_exp.slots_tiprack_sm = (10, 11)  # slots 1-11 on OT-2
@@ -1432,6 +1583,7 @@ def run(protocol: protocol_api.ProtocolContext):
             raise StopExecution
 
     def check_rinse_empty(well_data):
+        ## MODIFY: use subset of res_data?
         well_data = exp.rinse_data[exp.this_indx_rinse]
         if well_data.curr_vol < 1000:
             print("This rinse reservoir is empty. Switching to next.")
@@ -1590,6 +1742,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 which_tip = this_action.tip_id
                 swap_tips(which_tip)
 
+            ## MODIFY: use subset of res_data?
             waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
             rinse_data = exp.rinse_data[exp.this_indx_rinse]  # choose rinse data_set (alias)
             this_rinse = rinse_res_arr[exp.this_indx_rinse]  # Labware well object for protocol use
