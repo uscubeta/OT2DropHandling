@@ -373,8 +373,8 @@ class ActClass:
 class ResWell:
     def __init__(self):
         self.contents = ''  # solution name/chemical name
-        self.concentration = 0.0  # uM (micromol/L) # used for dilutions
-        self.goal_conc = 0.0  # uM (micromol/L) # used for dilutions
+        self.curr_conc = 0  # uM (micromol/L) # used for dilutions
+        self.goal_conc = 0  # uM (micromol/L) # used for dilutions
         self.curr_vol = 0  # uL
         self.goal_vol = 0  # uL
         self.max_vol = 10000  # uL
@@ -382,7 +382,8 @@ class ResWell:
         self.well_indx_num = 0
         self.loc = (0, 0)
         self.parent_sol_loc = (0, 0)
-        self.parent_conc = 0.0
+        self.parent_conc = 0
+        self.parent_transf_vol = 0
         self.dilution_complete = True
         self.assigned_tip = 0
         self.original_indx = 0
@@ -1023,10 +1024,13 @@ def set_up_res_data(exp: ExperimentData):
             new_res.goal_vol = exp.res_goal_vols[this_res_indx]
             new_res.contents = exp.res_contents[this_res_indx]
             new_res.goal_conc = exp.res_goal_concent[this_res_indx]
+            new_res.curr_conc = exp.res_start_concent[this_res_indx]
             # assign first num_res_tot, replace if diluting
             new_res.assigned_tip = current_tip_loc  # tuple (rack, well)
             current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
             tip_ids.append(this_res_indx)  # using the res index as tip index (first set)
+            if new_res.curr_conc < new_res.goal_conc:
+                new_res.dilution_complete = False
             res_set.append(new_res)  # this order may be out of sync with sol_res_loc
             if this_loc in exp.waste_res_loc:
                 waste_ids.append(this_res_indx)
@@ -1047,66 +1051,78 @@ def set_up_res_data(exp: ExperimentData):
 
 
 def plan_dil_series(exp: ExperimentData):
-    # second, plan dilution series:
-    # if exp.res_start_concent != exp.res_goal_concent:
-    # need to plan a dilution series:
+    # plan dilution series:
+
+    # double-checking that dilution is required
+    if exp.res_start_concent == exp.res_goal_concent:
+        return exp
 
     exp.do_dilutions = True
-
-    # res_dil_order = []  # keep or trash?
-    # planned_dilut_seq = []  # keep or trash?
+    num_res_tot = exp.num_res_tot
+    res_data = exp.res_data
     sam_timestamp = 0
-
     content_types = []
-    for each in range(exp.num_res_tot):
-        # print("Checking reservoir: ", each) # debug
+    for each in range(num_res_tot):
         # looping through all reservoirs to find ones with the same contents
-        new_cont = exp.res_contents[each]
+        new_cont = res_data[each].contents
         if new_cont not in content_types:
             if new_cont != 'Waste' and new_cont != 'DI_sol':
-                print("adding a new type:", exp.res_contents[each])
-                content_types.append(exp.res_contents[each])
+                print("adding a new type:", new_cont)
+                content_types.append(new_cont)
     exp.num_cont_types = len(content_types)
 
     for this_type in content_types:
-        # which_res = []
-        # which_locs = []
-        # start_conc = []
-        # goal_conc = []
-        # start_vols = []
-        # goal_vols = []
-        for each in range(exp.num_res_tot):
-            print(exp.res_contents[each])  # debug
-            if exp.res_contents[each] == this_type:
-                # make a subset of reservoirs that fit this_type
-                # excludes 'Waste' and 'DI_sol'
-                # res_loc = (exp.res_plate_indx_nums[each],
-                #            exp.res_well_indx_nums[each])
-                # which_locs.append(res_loc)
-                # which_res.append(each)  # subset of reservoir indices (delete? too many different indices)
-                # start_conc.append(exp.res_start_concent[each])
-                # goal_conc.append(exp.res_goal_concent[each])  # new indices for this subset
-                # # list of goal concentrations in order they appear
-                # start_vols.append(exp.res_start_vols[each])
-                # goal_vols.append(exp.res_goal_vols[each])
-        # map goal_concentration to an integer, then sort that list in reverse order,
-        # returning the index of the ordered subset list (does NOT correspond to original indices)
-        rev_dil_order = give_list_order(tuple(map(int, goal_conc)))
-        forward_dil_or = reverse_the_list(rev_dil_order)
-        # convert to
-        exp.rev_dil_order = rev_dil_order
-        exp.forward_dil_or = forward_dil_or
-        # res_dil_order.append(rev_dil_order)  # from new set of indices (SUBSET)
-        if DO_DEBUG:
-            print("_______________________________________________________")
-            print("For content type: ", this_type)  # debug
-            print("With reservoirs:", which_res, "subset of reservoir indices")  # debug
-            print("With locations:", which_locs)  # debug
-            print("Start concentration: ", start_conc)  # debug
-            print("Goal concentration: ", goal_conc)  # debug
-            print("Start volumes: ", start_vols)  # debug
-            print("Goal volumes: ", goal_vols)  # debug
-            print("New res order is: ", rev_dil_order, " indices for the SUBSET, not original reservoir list")
+        print(this_type)  # debug
+        res_subset = []
+        for each in range(num_res_tot):
+            check_contents = res_data[each].contents
+            # this_res = res_data[each]  # debug
+            # print(check_contents, this_res.loc, this_res.dilution_complete)  # debug
+            if check_contents == this_type:
+                res_subset.append(res_data[each])
+        res_subset.sort(key=lambda x: x.goal_conc, reverse=False)  # sort subset by goal_conc
+        num_subset = len(res_subset)
+        for each in res_subset:
+            print(each.loc, "  ", each.curr_vol, "  ",
+                  each.goal_vol, "  ", each.goal_conc,
+                  "  ", each.curr_conc)  # debug
+        for each in range(num_subset - 1):
+            this_res = res_subset[each]
+            # print("Evaluating", this_res.loc, " with concentration: ", this_res.goal_conc)  # debug
+            if not this_res.dilution_complete:
+                tran_mod = 10
+                transf_vol = 0
+                parent_id = each
+                parent_res = res_subset[parent_id]
+                while tran_mod > 0:
+                    parent_id += 1
+                    # print("pipette cannot transfer: ", tran_mod)  # debug
+                    # print("checking parent id", parent_id)  # debug
+                    if parent_id >= num_subset:
+                        print("alternative dilution parent not available.")
+                        break
+                    parent_res = res_subset[parent_id]
+                    transf_vol = int(this_res.goal_conc/parent_res.goal_conc * this_res.goal_vol)
+                    # print("Transferring: ", transf_vol)  # debug
+                    tran_mod = int(transf_vol % 100)  # need to round to 100 uL
+                if parent_id < (num_subset - 1):
+                    parent_res.goal_vol = parent_res.goal_vol + transf_vol
+                    print("Changing parent", parent_res.loc, " volume to ", parent_res.goal_vol)  # debug
+                    if parent_res.goal_vol > parent_res.max_vol:
+                        parent_res.goal_vol = parent_res.max_vol
+                this_res.parent_conc = parent_res.goal_conc
+                this_res.parent_sol_loc = parent_res.loc
+                this_res.parent_transf_vol = transf_vol
+
+        res_subset.sort(key=lambda x: x.goal_conc, reverse=True)  # sort subset by goal_conc
+        for each in range(num_subset - 1):
+            this_res = res_subset[each]
+            # print("Evaluating", this_res.loc, " with concentration: ", this_res.goal_conc)  # debug
+            if not this_res.dilution_complete:
+                parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
+                transf_vol = this_res.parent_transf_vol
+                dilut_vol = this_res.goal_vol - transf_vol
+            # START HERE!!!!!
         for each_res in range(len(rev_dil_order)):
             res_ind = rev_dil_order[each_res]  # indices for the SUBSET
             some_res = which_res[res_ind]  # index for the original list, exp.res_contents
@@ -1244,7 +1260,7 @@ def config_samples(exp: ExperimentData):
             this_res_data = exp.res_data[sample.solution_index]  # choose solution data_set (alias)
             sample.which_tip_loc = this_res_data.assigned_tip  # tuple (rack, well) - corresponds to res_well
             sample.incub_solution = this_res_data.contents
-            sample.incub_concen = this_res_data.concentration
+            sample.incub_concen = this_res_data.curr_conc
 
             # sample.targ_incub_gap_time_m = exp.sample_targ_incub_gap_times_min[start_sam]
             sample.loc_indx = (sample.plate_indx, sample.well_indx)
@@ -1366,12 +1382,7 @@ def user_config_exp():
                              'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
                              'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol')  # contents of the reservoirs
 
-    this_exp.res_start_concent = (0.0, 2000.0, 0.0,
-                                  0.0, 2000.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,)  # uM (micromol/L)
+
     # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
     this_exp.res_start_vols = [50000, 50000, 0,
                                50000, 50000, 0,
@@ -1385,19 +1396,18 @@ def user_config_exp():
                               6000, 6000, 6000, 6000,
                               5000, 5000, 5000, 5000, 5000, 5000,
                               5000, 5000, 5000, 5000, 5000, 5000]
-    # MODIFY:  may need to estimate and then check if enough volume
-    # this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
-    #                             0.0, 2000.0, 0.0,
-    #                             1600.0, 1000.0, 800.0, 600.0,
-    #                             1600.0, 1000.0, 800.0, 600.0,
-    #                             400.0, 300.0, 200.0, 100.0, 50.0, 10.0,
-    #                             400.0, 300.0, 200.0, 100.0, 50.0, 10.0)  # uM (micromol/L)
-    this_exp.res_goal_concent = (0.0, 2000.0, 0.0,
-                                 0.0, 2000.0, 0.0,
-                                 1600.0, 1000.0, 800.0, 600.0,
-                                 1600.0, 1000.0, 800.0, 600.0,
-                                 10.0, 50.0, 100.0, 200.0, 300.0, 400.0,
-                                 10.0, 50.0, 100.0, 200.0, 300.0, 400.0)  # uM (micromol/L)
+    this_exp.res_start_concent = (0, 2000, 0,
+                                  0, 2000, 0,
+                                  0, 0, 0, 0,
+                                  0, 0, 0, 0,
+                                  0, 0, 0, 0, 0, 0,
+                                  0, 0, 0, 0, 0, 0)  # uM (micromol/L)
+    this_exp.res_goal_concent = (0, 2000, 0,
+                                 0, 2000, 0,
+                                 1600, 1000, 800, 600,
+                                 1600, 1000, 800, 600,
+                                 10, 50, 100, 200, 300, 400,
+                                 10, 50, 100, 200, 300, 400)  # uM (micromol/L)
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
     this_exp.slots_tiprack_sm = (10, 11)  # slots 1-11 on OT-2
