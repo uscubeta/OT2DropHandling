@@ -61,11 +61,6 @@ DO_DEBUG = True
 
 # MODIFY: move these class objects and functions to a different file and import
 # define class objects
-class StopExecution(Exception):
-    def _render_traceback_(self):
-        pass
-
-
 class ExperimentData:
     # need a way to save this metadata (MODIFY!!)
     def __init__(self):
@@ -96,13 +91,9 @@ class ExperimentData:
         self.slots_reservoirs = ()  # reservoir plate slots, eg: (1, 4)
         self.slots_tiprack_lg = ()  # large tip rack slots, eg: (10, 11)
         self.slots_tiprack_sm = ()  # small tip rack slots, eg: (10, 11)
-        # self.which_rack = 0
+        self.which_rack = 0
         self.which_tip = 0
-        ## location tracking via (rack id, well id)
-        self.last_lg_tip_loc = (0, 0)  # last tip location "used" in plan
-        self.last_sm_tip_loc = (0, 0)  # last tip location "used" in plan
-        self.cur_lg_tip = (-1, -1)  # currently loaded lg tip
-        self.cur_sm_tip = (-1, -1)  # currently loaded sm tip
+        self.last_tip_loc = (0, 0)  # last tip location "used" in plan
 
         # labels for labware
         self.labels_res_plates = ('label',)
@@ -112,11 +103,10 @@ class ExperimentData:
         self.slot_offsets_res = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
         self.slot_offsets_lg_tips = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
         self.slot_offsets_sm_tips = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
-        self.tips_in_lg_racks = [[*range(0, 96, 1)], ]  # nested list,
-        self.tips_in_sm_racks = [[*range(0, 96, 1)], ]  # nested list,
-        # where 0 is A1, 1 is B1....8 is A2,... 88 is A12, ... etc to 95 for a full set of tips
-        # and each list within the nest corresponds to each rack
         # index numbers, for plate indices, eg: (0,...10), and well indices, eg: (0,...,0,...)
+        self.tips_in_racks = [[*range(0, 86, 1)], ]  # nested list, number of tips in each rack
+        # where 0 is A1, 1 is B1....8 is A2,...etc to 85 for a full set of tips
+        # and each list within the nest corresponds to each rack
         self.res_plate_indx_nums = (0,)  # zero-index of each res plate, start at 0
         self.res_well_indx_nums = (0,)  # zero-index of each well on res plate, start at 0
         self.sam_plate_indx_nums = (0,)  # zero-index of each sam plate, start at 0
@@ -209,35 +199,26 @@ class ExperimentData:
         this_string = "ExperimentData(" + str(self.exp_name) + ")"
         return this_string
 
-    def find_next_tip(self, which_pip: str):
-
-        if which_pip == 'small':
-            all_tips = self.tips_in_sm_racks
-            last_tip_loc = self.last_sm_tip_loc
-        else:
-            all_tips = self.tips_in_lg_racks
-            last_tip_loc = self.last_lg_tip_loc
-        cur_rack = last_tip_loc[0]
-        cur_well = last_tip_loc[1]
-
-        if cur_well < max(all_tips[cur_rack]):
-            # if there are more tips in the current rack
-            current_tip_indx = all_tips[cur_rack].index(cur_well)
-            new_tip = all_tips[cur_rack][(current_tip_indx + 1)]
-            new_rack = cur_rack
-        elif cur_well >= max(all_tips[cur_rack]):
-            new_rack = cur_rack + 1
+    def find_next_tip(self, last_tip_loc: (int, int)):
+        current_rack = last_tip_loc[0]
+        current_tip = last_tip_loc[1]
+        if current_tip < max(self.tips_in_racks[current_rack]):
+            current_tip_indx = self.tips_in_racks[current_rack].index(current_tip)
+            new_tip = self.tips_in_racks[current_rack][(current_tip_indx + 1)]
+            new_rack = current_rack
+        elif current_tip >= max(self.tips_in_racks[current_rack]):
+            new_rack = current_rack + 1
             if new_rack >= (self.num_lg_tipracks - 1):
                 print("Not enough tips! Load more tipracks before restarting.")
                 raise StopExecution
-            new_tip = min(all_tips[new_rack])
+            new_tip = min(self.tips_in_racks[new_rack])
         else:
             # no change
             print("ERROR: tip well out of range")
-            new_rack = cur_rack
-            new_tip = cur_well
+            new_rack = current_rack
+            new_tip = current_tip
         new_tip_loc = (new_rack, new_tip)
-        self.last_lg_tip_loc = new_tip_loc
+        self.last_tip_loc = new_tip_loc
         return new_tip_loc
 
     def find_max_res_vol(self, this_name: str):
@@ -418,6 +399,11 @@ class ResWell:
         this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
                       str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
         return this_string
+
+
+class StopExecution(Exception):
+    def _render_traceback_(self):
+        pass
 
 
 # define functions on these class objects
@@ -989,13 +975,11 @@ def check_config_exp(exp: ExperimentData):
 def set_up_res_data(exp: ExperimentData):
     # select the first tip
     # MODIFY: tips_in_lg_racks
-    which_pip = "large"
-    first_tip = min(exp.tips_in_lg_racks[0])  # min of tips in first rack
+    first_tip = min(exp.tips_in_racks[0])  # min of tips in first rack
     current_tip_loc = (0, first_tip)  # first tip location
     print("Selecting tips")
 
     # first, set up data for RESERVOIRS (solutions, waste, rinse)
-    res_locations = []
     waste_ids = []  # indices for waste reservoirs (subset from 0 to num_res_tot)
     rinse_ids = []  # indices for rinse reservoirs (subset from 0 to num_res_tot)
     sol_ids = []  # indices for solution reservoirs (subset from 0 to num_res_tot)
@@ -1043,7 +1027,7 @@ def set_up_res_data(exp: ExperimentData):
             new_res.curr_conc = exp.res_start_concent[this_res_indx]
             # assign first num_res_tot, replace if diluting
             new_res.assigned_tip = current_tip_loc  # tuple (rack, well)
-            current_tip_loc = exp.find_next_tip(which_pip)  # find next tip loc
+            current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
             tip_ids.append(this_res_indx)  # using the res index as tip index (first set)
             if new_res.curr_conc < new_res.goal_conc:
                 new_res.dilution_complete = False
@@ -1054,11 +1038,9 @@ def set_up_res_data(exp: ExperimentData):
                 rinse_ids.append(this_res_indx)
             elif this_loc in exp.sol_res_loc:
                 sol_ids.append(this_res_indx)
-                res_locations.append(this_loc)  # list of the same order as res_set data
         all_on_prev_plates = all_on_prev_plates + num_wells_on_this_plate
     exp.num_wells_res_plates = tuple(num_wells_all_plates)  # record as a tuple, no mods
     exp.labels_res_plates = tuple(plate_labels)
-    exp.res_data_locs = tuple(res_locations)
     exp.waste_indx = tuple(waste_ids)
     exp.rinse_indx = tuple(rinse_ids)
     exp.sol_indx = tuple(sol_ids)
@@ -1073,7 +1055,6 @@ def plan_dil_series(exp: ExperimentData):
 
     # double-checking that dilution is required
     if exp.res_start_concent == exp.res_goal_concent:
-        print("Dilution already complete")  # debug
         return exp
 
     exp.do_dilutions = True
@@ -1101,57 +1082,29 @@ def plan_dil_series(exp: ExperimentData):
                 res_subset.append(res_data[each])
         res_subset.sort(key=lambda x: x.goal_conc, reverse=False)  # sort subset by goal_conc
         num_subset = len(res_subset)
-        # for each in res_subset:
-        #     print(each.loc, "  ", each.curr_vol, "  ",
-        #           each.goal_vol, "  ", each.goal_conc,
-        #           "  ", each.curr_conc)  # debug
+        for each in res_subset:
+            print(each.loc, "  ", each.curr_vol, "  ",
+                  each.goal_vol, "  ", each.goal_conc,
+                  "  ", each.curr_conc)  # debug
         for each in range(num_subset - 1):
             this_res = res_subset[each]
-            # print("________________________________________________________")
-            # print("Evaluating", this_res.loc, " with concentration: ",
-            #       this_res.goal_conc, " uM and volume ", this_res.goal_vol, "uL")  # debug
+            # print("Evaluating", this_res.loc, " with concentration: ", this_res.goal_conc)  # debug
             if not this_res.dilution_complete:
-                tran_mod = 1
+                tran_mod = 10
                 transf_vol = 0
-                loop_num = 0
                 parent_id = each
                 parent_res = res_subset[parent_id]
-                orig_vol = this_res.goal_vol
                 while tran_mod > 0:
-                    loop_num += 1
                     parent_id += 1
                     # print("pipette cannot transfer: ", tran_mod)  # debug
                     # print("checking parent id", parent_id)  # debug
-                    if parent_id >= num_subset or loop_num > 10:
-                        print("alternative dilution parent not available for reservoir in loc ", this_res.loc)
+                    if parent_id >= num_subset:
+                        print("alternative dilution parent not available.")
                         break
                     parent_res = res_subset[parent_id]
-                    # print("Parent for dilution ", parent_res.loc,
-                    #       " with concentration ", parent_res.goal_conc, " uM")
-                    # ratio of child to parent concentration
-                    conc_ratio_chi_par = this_res.goal_conc / parent_res.goal_conc
-                    transf_vol = int(conc_ratio_chi_par * this_res.goal_vol)
+                    transf_vol = int(this_res.goal_conc/parent_res.goal_conc * this_res.goal_vol)
                     # print("Transferring: ", transf_vol)  # debug
                     tran_mod = int(transf_vol % 100)  # need to round to 100 uL
-                    if tran_mod > 0 and loop_num < 3:
-                        # and tran_mod % 10 == 0
-                        # increase transfer volume to use large pipette
-                        transf_vol = int(transf_vol + 100 - tran_mod)
-                        new_goal_vol = int(transf_vol / conc_ratio_chi_par)
-                        # print("Changing transf_vol to ", transf_vol,
-                        #       ", with goal volume ", new_goal_vol) # debug
-                        if new_goal_vol % 100 == 0:
-                            this_res.goal_vol = new_goal_vol
-                            # print("Changing", this_res.loc,
-                            #       " with concentration: ", this_res.goal_conc,
-                            #       " uM to goal volume ", this_res.goal_vol, "uL")  # debug
-                            parent_id -= 1  # keep the same parent and try again
-                        # else:
-                        #     print("Volume incompatible with pipette")
-                    elif tran_mod > 0 and loop_num >= 3:
-                        this_res.goal_vol = orig_vol
-                        # print("Changing", this_res.loc, " with concentration: ",
-                        #       this_res.goal_conc, " uM BACK to goal volume ", this_res.goal_vol, "uL")  # debug
                 if parent_id < (num_subset - 1):
                     parent_res.goal_vol = parent_res.goal_vol + transf_vol
                     print("Changing parent", parent_res.loc, " volume to ", parent_res.goal_vol)  # debug
@@ -1160,20 +1113,16 @@ def plan_dil_series(exp: ExperimentData):
                 this_res.parent_conc = parent_res.goal_conc
                 this_res.parent_sol_loc = parent_res.loc
                 this_res.parent_transf_vol = transf_vol
+
         res_subset.sort(key=lambda x: x.goal_conc, reverse=True)  # sort subset by goal_conc
         for each in range(num_subset - 1):
             this_res = res_subset[each]
-            print("________________________________________________________")
-            print("Evaluating", this_res.loc, " with concentration: ",
-                  this_res.goal_conc, " uM and volume ", this_res.goal_vol, "uL")  # debug
+            # print("Evaluating", this_res.loc, " with concentration: ", this_res.goal_conc)  # debug
             if not this_res.dilution_complete:
                 parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
                 transf_vol = this_res.parent_transf_vol
                 dilut_vol = this_res.goal_vol - transf_vol
-
-        # START HERE!!!!!
-
-
+            # START HERE!!!!!
         for each_res in range(len(rev_dil_order)):
             res_ind = rev_dil_order[each_res]  # indices for the SUBSET
             some_res = which_res[res_ind]  # index for the original list, exp.res_contents
@@ -1240,6 +1189,8 @@ def config_samples(exp: ExperimentData):
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # second, plan dilution series
 
+
+
     this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
     this_action.change_tip(sample.which_tip_loc)  # load tip
 
@@ -1304,12 +1255,8 @@ def config_samples(exp: ExperimentData):
                 if sample.targ_num_mixes < 0:
                     sample.targ_num_mixes = 0
 
-            # MODIFY THIS BEFORE RUNNING!
-            # MODIFY to "locations" and fraction of total volume
             sample.solution_location = exp.sam_inoculation_locations[this_sam_indx]
-            # MODIFY tp finding index with location data
-            # parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
-            sample.solution_index = 0 # res_locations.index(sample.solution_location)
+            sample.solution_index = res_locations.index(sample.solution_location)
             this_res_data = exp.res_data[sample.solution_index]  # choose solution data_set (alias)
             sample.which_tip_loc = this_res_data.assigned_tip  # tuple (rack, well) - corresponds to res_well
             sample.incub_solution = this_res_data.contents
@@ -1435,6 +1382,7 @@ def user_config_exp():
                              'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
                              'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol')  # contents of the reservoirs
 
+
     # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
     this_exp.res_start_vols = [50000, 50000, 0,
                                50000, 50000, 0,
@@ -1462,16 +1410,12 @@ def user_config_exp():
                                  10, 50, 100, 200, 300, 400)  # uM (micromol/L)
     # list of tipracks for pipettes (MODIFY if re-using/returning tips)
     this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
-    # this_exp.slots_tiprack_sm = (10, 11)  # slots 1-11 on OT-2
+    this_exp.slots_tiprack_sm = (10, 11)  # slots 1-11 on OT-2
     this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
-                                     (-1.10, 1.50, -0.10))  # calibration offset for LARGE pipette tips
-    # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for SMALL pipette tips
-    # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85
-    # for a full set of tips, use [*range(0, 96, 1)], modify '96' for incomplete set
-    # for a rack without a full set of tips, innumerate list [0,1,...] or modify range notation
-    # eg: [*range(0, 60, 1), *range(66, 96, 1)] for rack missing 60-65
-    this_exp.tips_in_lg_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
-    # this_exp.tips_in_sm_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
+                                     (-1.10, 1.50, -0.10))  # calibration offset for tips
+    # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for tips
+    this_exp.tips_in_racks = [[*range(0, 86, 1)], [*range(0, 86, 1)]]  # nested list,
+    # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85 for a full set of tips!
 
     # list of sam_plates corresponds to index of plates 0,1,2,... (num_plates-1)
     this_exp.slots_sam_plates = (2, 3, 6)  # slots 1-11 on OT-2 for the plates (indexed 0,1,2...)
@@ -1750,43 +1694,30 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(output_string)  # debug
         return timestamp_now
 
-    def swap_tips(next_tip_loc: (int, int), which_pip: str):
+    def swap_tips(position: (int, int)):
+        # START HERE: update from TestingTipSwitching.py
         # swap tips for the pipette,
         # if using different tips for diff solutions
-        rack_pos = next_tip_loc[0]
-        which_tipwell = next_tip_loc[1]
-        if which_pip == 'small':
-            pipette = pipette_sm
-            which_rack = tips_sm[rack_pos]
-            max_racks = exp.num_sm_tipracks
-            if which_tipwell not in exp.tips_in_sm_racks[rack_pos]:
-                print("Not a valid position in this tiprack:", next_tip_loc)
-                # raise StopExecution
-        elif which_pip == 'large':
-            pipette = pipette_lg
-            which_rack = tips_lg[rack_pos]
-            max_racks = exp.num_lg_tipracks
-            if which_tipwell not in exp.tips_in_lg_racks[rack_pos]:
-                print("Not a valid position in this tiprack:", next_tip_loc)
-                # raise StopExecution
-        else:
-            print("Select pipette for swapping tips: 'small' or 'large'. Defaulting to 'large'")
-            pipette = pipette_lg
-            which_rack = tips_lg[rack_pos]
-            max_racks = exp.num_lg_tipracks
-            # raise StopExecution
+        # MODIFY, add pipette variable and tiprack variable
+        # variable exp.tips_in_racks is a nested list
+        which_rack = position[0]
+        which_tipwell = position[1]
 
-        if rack_pos >= max_racks:
-            print("Tiprack out of bounds!  Tiprack ", rack_pos, " is not loaded.")
-            # raise StopExecution
+        if which_rack >= exp.num_lg_tipracks:
+            print("Tiprack out of bounds!  Tiprack ", which_rack, " is not loaded.")
+            raise StopExecution
+
+        if which_tipwell not in exp.tips_in_racks[which_rack]:
+            print("Not a valid position in this tiprack:", position)
+            raise StopExecution
 
         # LOCAL VARIABLE - how to change global variable instead?
-        if pipette.has_tip:
-            pipette.return_tip(home_after=True)  # return last tip to its rack  (not discarded)
-        pipette.pick_up_tip(which_rack.wells()[which_tipwell])  # pick up selected tip from chosen rack
-        pipette.home()  # homes pipette ONLY, NOT XYZ
+        pipette_lg.return_tip(home_after=True)  # return last tip to its rack  (not discarded)
+        tip_rack_lg = tips_lg[which_rack]  # choose one of the loaded rack, indexed 0, 1, ....
+        pipette_lg.pick_up_tip(tip_rack_lg.wells()[position])  # pick up selected tip from chosen rack
+        pipette_lg.home()  # homes pipette ONLY, NOT XYZ
 
-        return None
+        return position
 
     def run_sequence():
         # internal function, so dont need to pass exp, sample_plates, reservoirs, etc

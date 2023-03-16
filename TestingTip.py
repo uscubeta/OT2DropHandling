@@ -630,7 +630,7 @@ def run(protocol: protocol_api.ProtocolContext):
 
     # pick up pipette tip
     protocol.set_rail_lights(True)  # turn on deck lights
-    protocol.home()  # home all axis: XYZ & pipette
+    protocol.home()  # home all axis: XYZ & both pipette
     pipette_lg.pick_up_tip()  # MODIFY: manage pipette tips - assign tips to each well?
 
     swap_tips((1, 0))
