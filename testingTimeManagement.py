@@ -1173,7 +1173,6 @@ def plan_dil_series(exp: ExperimentData):
 
         # START HERE!!!!!
 
-
         for each_res in range(len(rev_dil_order)):
             res_ind = rev_dil_order[each_res]  # indices for the SUBSET
             some_res = which_res[res_ind]  # index for the original list, exp.res_contents
@@ -1309,7 +1308,7 @@ def config_samples(exp: ExperimentData):
             sample.solution_location = exp.sam_inoculation_locations[this_sam_indx]
             # MODIFY tp finding index with location data
             # parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
-            sample.solution_index = 0 # res_locations.index(sample.solution_location)
+            sample.solution_index = 0  # res_locations.index(sample.solution_location)
             this_res_data = exp.res_data[sample.solution_index]  # choose solution data_set (alias)
             sample.which_tip_loc = this_res_data.assigned_tip  # tuple (rack, well) - corresponds to res_well
             sample.incub_solution = this_res_data.contents
@@ -1557,20 +1556,43 @@ def run(protocol: protocol_api.ProtocolContext):
             this_slot = slots[xx]
             this_name = names[xx]
             this_label = labels[xx]
-            this_offset = offsets[xx]
-            new_res = protocol.load_labware(this_name, this_slot, label=this_label)
-            new_res.set_offset(this_offset[0], this_offset[1], this_offset[2])
-            plates.append(new_res)  # each plate can be accessed using # this_plate =  sample_plates[i]
+            rack_offset = offsets[xx]
+            new_rack = protocol.load_labware(this_name, this_slot, label=this_label)
+            new_rack.set_offset(rack_offset[0], rack_offset[1], rack_offset[2])
+            plates.append(new_rack)
+            # each plate can be accessed using
+            # this_plate =  sample_plates[i]  # NOT nested
         return plates
 
-    def make_res_array(loc_array):
-        res_array = []
+    def check_plate_offset(check_plate: Labware):
+        first_col = check_plate.columns()[0]
+        first_row = check_plate.rows()[0]
+        num_cols = len(first_row)
+        num_rows = len(first_col)
+        last_row = check_plate.rows()[num_rows-1]
+
+        cornerTL = first_row[0]
+        cornerTR = first_row[num_cols - 1]
+        cornerBL = first_col[num_rows - 1]
+        cornerBR = last_row[num_cols - 1]
+
+        well = check_plate.wells()[0]
+        pipette_lg.move_to(well.top())
+        center_location = well.top()
+
+        adjusted_location = center_location.move(types.Point(x=+1, y=+1, z=+1))
+        pipette_lg.move_to(adjusted_location)
+        return None
+
+    def make_well_array(plates_labware: List[Labware],
+                        loc_array: Tuple[Tuple[int, int]]):
+        res_array = []  # array of wells (not nested)
         for xx in range(len(loc_array)):
-            this_loc = loc_array[xx]
-            this_plate = this_loc[0]
-            this_well = this_loc[1]
-            new_res = reservoir_plates[this_plate].wells()[this_well]
-            res_array.append(new_res)
+            this_loc = loc_array[xx]  # tuple (rack,well)
+            this_plate = this_loc[0]  # rack, indexed with 0,1,2, ...
+            this_well = this_loc[1]  # well, indexed with 0,1,2, ..
+            new_res = plates_labware[this_plate].wells()[this_well]
+            res_array.append(new_res)  # individual wells (not nested array)
         return res_array
 
     # set up experiment, exp is global to run()
@@ -1609,13 +1631,13 @@ def run(protocol: protocol_api.ProtocolContext):
         print("WARNING: without large pipette, cannot continue script. ")
         raise StopExecution
 
-    tip_rack_lg = tips_lg[exp.which_rack]  # choose one of the racks
+    tip_rack_lg = tips_lg[0]  # choose one of the racks
     reservoir_plates = load_plates(exp.slots_reservoirs, exp.res_plate_names,
                                    exp.labels_res_plates, exp.slot_offsets_res)
 
-    rinse_res_arr = make_res_array(exp.rinse_res_loc)  # array of rinse well objects
-    waste_res_arr = make_res_array(exp.waste_res_loc)  # array of waste well objects
-    sol_res_arr = make_res_array(exp.sol_res_loc)  # array of solution well objects
+    rinse_res_arr = make_well_array(reservoir_plates, exp.rinse_res_loc)  # array of rinse well objects (NOT nested)
+    waste_res_arr = make_well_array(reservoir_plates, exp.waste_res_loc)  # array of waste well objects (NOT nested)
+    sol_res_arr = make_well_array(reservoir_plates, exp.sol_res_loc)  # array of solution well objects (NOT nested)
 
     # START HERE: make these global variables?  modify with global keyword?
     # waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
@@ -1677,7 +1699,7 @@ def run(protocol: protocol_api.ProtocolContext):
         return None
 
     # MODIFY: add selection for tip position, and which pipette
-    def fill_mix_well(this_well, this_res, res_data, this_waste, num_mix=1):
+    def fill_mix_well(this_well, well_volume, this_res, res_data, this_waste, num_mix=1):
         # needs to within run() to use protocol & pipette
         f_out_string = "Filling well: " + str(this_well)  # debug
         # protocol.comment(f_out_string)  # debug
@@ -1698,7 +1720,7 @@ def run(protocol: protocol_api.ProtocolContext):
         print(f_out_string)  # debug
         return timestamp_now
 
-    def mix_well(this_well, this_waste, num_times):
+    def mix_well(this_well, this_waste, mix_volume, num_times):
         # uses the same tip, not keeping track of pipette tips
         f_out_string = "Mixing one well: " + str(this_well)  # debug
         protocol.comment(f_out_string)  # debug
@@ -1741,7 +1763,7 @@ def run(protocol: protocol_api.ProtocolContext):
         pre_rinse_time = math.ceil(time.perf_counter())
 
         empty_well(this_well, this_waste, waste_data)
-        fill_mix_well(this_well, in_res, in_res_data, this_waste, 1)
+        fill_mix_well(this_well, well_volume, in_res, in_res_data, this_waste, 1)
         check_rinse_empty(in_res_data)  # checking rinse well volume
 
         timestamp_now = math.ceil(time.perf_counter())
@@ -1791,6 +1813,9 @@ def run(protocol: protocol_api.ProtocolContext):
     def run_sequence():
         # internal function, so dont need to pass exp, sample_plates, reservoirs, etc
         # run_sequence(exp: ExperimentData, plates_labware: List[Labware]):
+        which_pip = exp.pipettes_in_use
+        if which_pip == 'both':
+            which_pip = 'large'
         exp_sequence = deepcopy(exp.planned_sequence)
         num_actions = len(exp_sequence)
         all_samples = exp.all_samples  # data for samples (nested list of SampleWell type objects)
@@ -1819,7 +1844,7 @@ def run(protocol: protocol_api.ProtocolContext):
             this_well = sample_plates[sam_plate_id].wells()[sam_well_id]  # Labware well object for protocol use
             if which_tip != this_action.tip_id:
                 which_tip = this_action.tip_id
-                swap_tips(which_tip)
+                swap_tips(which_tip, which_pip)
 
             ## MODIFY: use subset of res_data?
             waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
@@ -1852,14 +1877,14 @@ def run(protocol: protocol_api.ProtocolContext):
                 exp.this_indx_solut = sam_data.solution_index  # change which solution is in use
                 this_res_data = exp.res_data[exp.this_indx_solut]  # choose solution data_set (alias)
                 this_solution = sol_res_arr[exp.this_indx_solut]  # Labware well object for protocol use
-                stamp = fill_mix_well(this_well, this_solution, this_res_data, this_waste, load_mixes)
+                stamp = fill_mix_well(this_well, well_volume, this_solution, this_res_data, this_waste, load_mixes)
                 check_res_empty(this_res_data)  # checking res-well volume
                 sam_data.incub_reload_timestmps.append(stamp)
             # Case: mix (3)
             elif action_type == 'mix':
                 print("Mixing sample #: ", sample_id)  # debug
                 # MODIFY: choose/swap pipette tips
-                stamp = mix_well(this_well, this_waste, 1)
+                stamp = mix_well(this_well, this_waste, mix_volume, 1)
                 sam_data.incub_mix_timestmps.append(stamp)
             # Case: load (4)
             elif action_type == 'load':
@@ -1869,7 +1894,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 this_res_data = exp.res_data[exp.this_indx_solut]  # choose solution data_set (alias)
                 this_solution = sol_res_arr[exp.this_indx_solut]  # Labware well object for protocol use
 
-                stamp = fill_mix_well(this_well, this_solution, this_res_data, this_waste, load_mixes)
+                stamp = fill_mix_well(this_well, well_volume, this_solution, this_res_data, this_waste, load_mixes)
                 check_res_empty(this_res_data)  # checking res-well volume
                 sam_data.incub_st_timestmp = stamp
             # Case: rinse (5)
