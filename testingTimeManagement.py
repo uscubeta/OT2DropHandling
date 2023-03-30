@@ -322,29 +322,41 @@ class ActClass:
         # initializing function, _attribute is a hidden attribute !
         self._sam_id = sam_id  # integer of samples indexed 0 to num_sam
         # in the order entered by user_config_exp
-        self._action = action  # string ['load', 'unload', 'reload', 'mix', 'rinse' ]
+        self._action = action  # complex action string
+        # complex: ['load', 'reload', 'unload', 'rinse'] - multi step, multi-tips
+        # simple:  [ 'mix', 'transf' ] - one step, one tip
         self._start_stamp = stamp  # integer of start timestamp (seconds) for the desired action
         self._end_stamp = self._calc_end()  # calculated, estimated end timestamp
-        self._which_tip = (0, 0)  # change to (rk,wl) terminology
+        self._which_tip = (11, 0)  # change to (rack_slot,well_loc) terminology
+        self._time_stamp = (self._start_stamp, self._end_stamp)  # timestamp
+        self._tip_loc = (11, 0)  # change to (rack_slot,well_loc) terminology
+        self._from_loc = (1, 0)  # change to (rack_slot,well_loc) terminology
+        self._to_loc = (2, 0)  # change to (rack_slot,well_loc) terminology
+        self._load_time_s = 40  # estimated time for 'load' action, in seconds
+        self._mix_time_s = 20  # estimated time for 'mix' action, in seconds
+        self._rinse_time_s = 60  # estimated time for 'rinse' or 'unload' action
 
     # returns this when calling this object
     def __repr__(self):
-        this_string = "(" + str(self.sam_id) + ", '" + \
-                      str(self.action) + "', " + str(self.start) + \
-                      ", " + str(self.end) + ")"
+        this_string = "(" + str(self._time_stamp) + ", '" + \
+                      str(self.action) + "', " + str(self._from_loc) + \
+                      ", " + str(self._from_loc) + ", " + \
+                      str(self._tip_loc) + ")"
         return this_string
 
     # returns this string when called via print(x)
     def __str__(self):
-        this_string = "(" + str(self.sam_id) + ", '" + \
-                      str(self.action) + "', " + str(self.start) + \
-                      ", " + str(self.end) + ")"
+        this_string = "(" + str(self._time_stamp) + ", '" + \
+                      str(self.action) + "', " + str(self._from_loc) + \
+                      ", " + str(self._from_loc) + ", " + \
+                      str(self._tip_loc) + ")"
         return this_string
 
     # setter methods
     def change_start(self, new_start: int):
         self._start_stamp = new_start
         self._end_stamp = self._calc_end()
+        self._time_stamp = (self._start_stamp, self._end_stamp)
 
     def change_tip(self, set_tip: (int, int)):
         self._which_tip = set_tip
@@ -371,6 +383,22 @@ class ActClass:
         return self._end_stamp
 
     @property
+    def stamp(self):
+        return self._time_stamp
+
+    @property
+    def par_loc(self):
+        return self._from_loc
+
+    @property
+    def targ_loc(self):
+        return self._to_loc
+
+    @property
+    def tip_loc(self):
+        return self._tip_loc
+
+    @property
     def length(self):
         time2complete = self._end_stamp - self._start_stamp
         return time2complete
@@ -379,11 +407,11 @@ class ActClass:
     def _calc_end(self):
         # MODIFY: check that global variables are defined.
         if self.action == 'load':
-            prev_end_stamp = self._start_stamp + load_time_s
-        elif self.action == 'mix':
-            prev_end_stamp = self._start_stamp + mix_time_s
+            prev_end_stamp = self._start_stamp + self._load_time_s
+        elif self.action == 'mix' or self.action == 'transf':
+            prev_end_stamp = self._start_stamp + self._mix_time_s
         elif self.action == 'rinse' or self.action == 'unload' or self.action == 'reload':
-            prev_end_stamp = self._start_stamp + rinse_time_s
+            prev_end_stamp = self._start_stamp + self._rinse_time_s
         else:
             prev_end_stamp = self._start_stamp
         return prev_end_stamp
@@ -425,7 +453,8 @@ def swap_actions(exp_sequence: List[ActClass], act_pos_this: int, act_pos_that: 
     # swap the two actions in the list  (^ this_action, old_action)
     # print("Swapping these actions: ", exp_sequence[pos2], exp_sequence[pos1])
     num_actions = len(exp_sequence)
-    if act_pos_this >= num_actions or act_pos_that >= num_actions:
+    if act_pos_this >= num_actions or act_pos_this < 0 \
+            or act_pos_that >= num_actions or act_pos_that < 0:
         print("WARNING: Cannot swap actions, positions are out of index range.")
         return exp_sequence
     exp_sequence[act_pos_this], exp_sequence[act_pos_that] = exp_sequence[act_pos_that], exp_sequence[act_pos_this]
@@ -459,21 +488,22 @@ def swap_time_w_gap(exp_sequence: List[ActClass], be_first_pos: int, be_second_p
     return exp_sequence
 
 
-def shift_all_for_load(exp_sequence: List[ActClass], sam_index: int, shift_time: int):
+def shift_all_for_load(exp_sequence: List[ActClass], this_sam_id: int, shift_time: int):
     # make a list of all load actions that come after sam_index 'load'
     # shift all actions for samples in that list by a time shift_time
     # then sorts and prioritizes the action list
     # print("Shifting all for load of action:", sam_index)  # debug
     shift_for_load = False
-    sams_2_shift = []
+    sams_2_shift = [] # list of samples that are loaded after this_sam_id
     for ix in range(len(exp_sequence)):
         # find all load actions that come after sam_index load
         this_action = exp_sequence[ix]
-        if this_action.sam_id == sam_index:
+        if this_action.sam_id == this_sam_id:
             if this_action.action == 'load':
                 shift_for_load = True
         if shift_for_load and this_action.action == 'load':
             sams_2_shift.append(this_action.sam_id)
+            # list of samples that are loaded after this_sam_id
 
     print("Shifting all actions for samples: ", sams_2_shift)  # debug
     for ix in range(len(exp_sequence)):
@@ -633,49 +663,74 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
 
 
 def find_when_action(action: str, exp_sequence: List[ActClass], act_pos: int):
+    # find the index of the action 'action' that has the same
+    # sample id as the action in act_pos
+
     # action = 'load', 'unload', etc...
     if act_pos >= len(exp_sequence):
-        act_pos = len(exp_sequence) - 1
+        act_pos = len(exp_sequence) - 1  # position must be within sequence
     elif act_pos < 0:
-        act_pos = 0
+        act_pos = 0  # position must be within sequence
+
     find_action = exp_sequence[act_pos]
     # print("This action is:", find_action) # debug
-    find_action_id = find_action.sam_id
+    find_action_id = find_action.sam_id  # sample id of action # MODIFY: use sam Location instead?
     when_action = 0
     for ix in range(len(exp_sequence)):
         this_action = exp_sequence[ix]  # should be an alias, not a copy
+        # MODIFY: use sam Location instead?
         if this_action.action == action and this_action.sam_id == find_action_id:
             when_action = ix
-            break
+            break  # action index found, break out of for loop
     # print("This action is correlated with:", exp_sequence[when_action])  # debug
     return when_action
 
 
-def find_gap_array(exp_sequence: List[ActClass], act_pos: int):
-    if act_pos >= len(exp_sequence):
-        act_pos = len(exp_sequence)
+def find_gap_array(exp_seq: List[ActClass], act_pos: int):
+    # returns a list of gaps, in seconds, between the actions
+    # in exp_sequence up to act_pos, including zeros
+
+    # first, check that index is within range
+    if act_pos >= len(exp_seq):
+        act_pos = len(exp_seq) - 1  # position must be within sequence
     elif act_pos < 0:
-        act_pos = 0
-    gap_list = []  # need a new list since can go back to prev iteration
+        act_pos = 0  # position must be within sequence
+
+    gap_list = []  # list of gaps, in seconds, between actions
     for subx in range(act_pos - 1):
-        sub_act = exp_sequence[subx]
-        next_act = exp_sequence[subx + 1]
-        next_gap = next_act.start - sub_act.end
-        gap_list.append(next_gap)
-    return gap_list
+        # checking actions from zero to act_pos
+        sub_act = exp_seq[subx]  # first
+        next_act = exp_seq[subx + 1]  # second
+        next_gap = next_act.start - sub_act.end  # time between actions, in seconds
+        gap_list.append(next_gap)  # list includes zeros
+
+    # index for actions (eg __0___), gaps (eg 0 ), and gap-time (eg x0) shown below:
+    # __0__  0  __1__  1  __2__  2  __3__  3  __4__  4  __5__  5  __6__  6  __7__ ...etc
+    #       x0        x1        x2        x3        x4        x5        x6
+    return gap_list  # list of gaps, in seconds, between actions up to (act_pos - 1)
 
 
 def find_next_gap(exp_sequence: List[ActClass], from_pos: int, to_pos: int):
-    which_gap = to_pos - 1
-    this_action = exp_sequence[to_pos]  # should be an alias, not a copy
-    this_action_time = this_action.end - this_action.start
-    gaps_before_this = find_gap_array(exp_sequence, to_pos)
+    # returns the index of the next available gap for action of interest @ to_pos
+    # from the gap AFTER the load/unload action step (from_pos)
+
+    # index for actions (eg __0___), gaps (eg 0 ), and gap-time (eg x0) shown below:
+    # __0__  0  __1__  1  __2__  2  __3__  3  __4__  4  __5__  5  __6__  6  __7__ ...etc
+    #       x0        x1        x2        x3        x4        x5        x6
+    this_action = exp_sequence[to_pos]  # the action of interest, at index to_pos
+    this_action_time = this_action.end - this_action.start  # time-length of action, in seconds
+    gaps_before_this = find_gap_array(exp_sequence, to_pos)  # list of gaps, in seconds,
+    # array labeled zero to (to_pos - 1)
+
+    which_gap = to_pos - 1  # gap right before action of interest
     for ig in range(from_pos, len(gaps_before_this)):
-        gap = gaps_before_this[ig]
+        # indices of gaps from AFTER the from_pos action step to gap before (to_pos - 1) step
+        gap = gaps_before_this[ig]  # gap-length in seconds
         if gap >= this_action_time:
-            which_gap = ig
+            # if the gap-length is longer than the action time
+            which_gap = ig  # select index for the gap, corresponding to step before
             break
-    return which_gap
+    return which_gap  # returns index of first gap where action @ to_pos can fit, but after action @ from_pos
 
 
 def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
@@ -800,50 +855,61 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
 
 def find_gaps_compress_actions(in_seq: List[ActClass]):
     # Find the gaps in exp_sequence and compress when there are gaps
-    # moving the mix/rinse forwards if they fit into gaps (no swapping)
+    # moving all 'rinse' steps forward if they fit into gaps (no swapping)
     exp_sequence = deepcopy(in_seq)
     num_actions = len(exp_sequence)
     for ix in range(1, num_actions):
+        # cycle through indices from 1 to (num_actions - 1)
         this_action = exp_sequence[ix]  # should be an alias, not a copy
-        if this_action.action == 'mix' or this_action.action == 'rinse':
-            # only shifting mix and rinse actions, NOT load/unload/reload
-            # MODIFY: give user option not to shift mix too early?
+        if this_action.action == 'rinse':
+            # only shifting 'rinse' actions, NOT load/unload/reload/mix <- modified so mix not compressed
             old_action = exp_sequence[(ix - 1)]  # should be an alias, not a copy
             if this_action.start > old_action.end:
                 # print("Changing action: ", this_action)  # debug
-                this_action.change_start(old_action.end)
+                this_action.change_start(old_action.end)  # moving action to start earlier
     return exp_sequence
 
 
 def swap_into_gaps(in_seq: List[ActClass], sam_indx: Tuple[int]):
-    # Check the gaps between two actions and see if the following
-    # action can be swapped into the gap
-    exp_sequence = deepcopy(in_seq)
-    iterations = 0
-    hall_pass = len(exp_sequence) * 5
-    iter_ix = 2
+    # Check the gaps between two actions and see if
+    # 'rinse' actions can be swapped into the gap
+    exp_sequence = deepcopy(in_seq)  # not alias, deep copy
+    iterations = 0  # tracking when to bail
+    hall_pass = len(exp_sequence) * 5  # when to bail out of loop
+    iter_ix = 2  # start at index 2 (third in sequence)
     while iter_ix < len(exp_sequence):
-        iterations += 1
+        # cycle through the action step in_seq
+        iterations += 1  # track to bail
         if iterations > hall_pass:
-            print("WARNING: something is wrong, bailing out of while loop.")
+            print("WARNING: something is wrong, bailing out of swap_into_gaps while loop.")
             break  # emergency break out of while loop
         # iterate over list of actions, starting with the second action
         if iter_ix < 2:
-            iter_ix = 2  # if accidentally went back to the first
+            iter_ix = 2  # if accidentally went back too far
 
         print("ix is now:", iter_ix)  # debug
         this_action = exp_sequence[iter_ix]  # should be an alias, not a copy
-        which_gap = iter_ix - 1
-        prev = which_gap
-        if this_action.action == 'mix':
-            when_loaded = find_when_action('load', exp_sequence, iter_ix)
-            which_gap = find_next_gap(exp_sequence, when_loaded, iter_ix)
-        elif this_action.action == 'rinse':
-            when_unloaded = find_when_action('unload', exp_sequence, iter_ix)
-            which_gap = find_next_gap(exp_sequence, when_unloaded, iter_ix)
+        which_gap = iter_ix - 1  # gap index prior to this action
+        prev = which_gap  # previous action and gap
 
-        if which_gap < (prev):
-            last_action = exp_sequence[which_gap]  # should be an alias, not a copy
+        # index for actions (eg __0___), gaps (eg 0 ), and gap-time (eg x0) shown below:
+        # __0__  0  __1__  1  __2__  2  __3__  3  __4__  4  __5__  5  __6__  6  __7__ ...etc
+        #       x0        x1        x2        x3        x4        x5        x6
+        # if this_action.action == 'mix':
+        #     # MODIFY: mix step should be spread out, not shuffled all together
+        #     # 'mix' must come after 'load'
+        #     when_loaded = find_when_action('load', exp_sequence, iter_ix)  # index when this sample was loaded
+        #     which_gap = find_next_gap(exp_sequence, when_loaded, iter_ix)  # gap index for the first gap
+        #     # between when sample was loaded and now, where action will fit
+        if this_action.action == 'rinse':
+            # 'rinse' must come after 'unload'
+            when_unloaded = find_when_action('unload', exp_sequence, iter_ix)  # index when sample was unloaded
+            which_gap = find_next_gap(exp_sequence, when_unloaded, iter_ix)  # gap index for the first gap
+            # between when the sample was unloaded and now, where action will fit
+
+        if which_gap < prev:
+            # if the first gap where action fits comes before the gap prior to this step
+            last_action = exp_sequence[which_gap]  # action before the gap
             print("ix:", iter_ix, "Moving ", this_action, " after ", last_action)  # debug
             this_action.change_start(last_action.end)
             exp_sequence = prioritize_sequence(exp_sequence, sam_indx)
@@ -990,8 +1056,10 @@ def set_up_res_data(exp: ExperimentData):
     # select the first tip
     # MODIFY: tips_in_lg_racks
     which_pip = "large"
+    first_rack = min(exp.slots_tiprack_lg)
     first_tip = min(exp.tips_in_lg_racks[0])  # min of tips in first rack
-    current_tip_loc = (0, first_tip)  # first tip location
+    current_tip_loc = (first_rack, first_tip)  # first tip location
+
     print("Selecting tips")
 
     # first, set up data for RESERVOIRS (solutions, waste, rinse)
@@ -1256,6 +1324,7 @@ def config_samples(exp: ExperimentData):
     # list of plates [0 to num_plates-1] with
     # list of samples [0 to num_sam_in_plate-1] where each
     # object in the NESTED list is of class SampleWell objects
+    tip_ids = exp.tips_used  # list of tuples [(rack, well), ...]
     sample_set = []  # all samples, NESTED list of lists of objects
     num_plates = exp.num_sam_plates
     plate_labels = ['label'] * num_plates
@@ -1377,13 +1446,35 @@ def config_samples(exp: ExperimentData):
 # have user fill out for each experiment
 def user_config_exp():
     this_exp = ExperimentData()
+
+    # First, select a name for the experiment and enter date, then
+    # indicate if using both large or/and small pipette and then which
+    # slots on the OT2 Deck will be used by the reservoir/sample/tip racks
     this_exp.exp_name = "TestingTimeManagement"  # update every run
     this_exp.exp_date = 20230103  # yyyymmdd # update every run
-
     this_exp.pipettes_in_use = 'large'  # 'large', 'small' or 'both'
+    this_exp.slots_reservoirs = (1, 4, 5, 8, 7, 9)  # location of reservoir racks (slots 1-11)
+    this_exp.slots_sam_plates = (2, 3, 6)  # location of sample racks (slots 1-11)
+    this_exp.slots_tiprack_lg = (10, 11)  # location of large tip racks (slots 1-11)
+    # this_exp.slots_tiprack_sm = (10, 11)  # location of small tip racks (slots 1-11)
+    #  OT-2 Opentrons Deck
+    # ________________
+    # | 10 | 11 | Tr |   # load tip racks farther to the back of the deck
+    # |  7 |  8 |  9 |   # load reservoir racks closer to the fan (left)
+    # |  4 |  5 |  6 |   # load sample racks farther from the fan (right)
+    # |  1 |  2 |  3 |   # run check_offsets to confirm the xyz loc on racks
+    # ________________
 
-    # list the reservoir wells in order plates 0 to (num_res_plates - 1)
-    this_exp.slots_reservoirs = (1, 4, 5, 8, 7, 9)  # slots 1-11 on OT-2
+
+    this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
+                                     (-1.10, 1.50, -0.10))  # calibration offset for LARGE pipette tips
+    # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for SMALL pipette tips
+    # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85
+    # for a full set of tips, use [*range(0, 96, 1)], modify '96' for incomplete set
+    # for a rack without a full set of tips, innumerate list [0,1,...] or modify range notation
+    # eg: [*range(0, 60, 1), *range(66, 96, 1)] for rack missing 60-65
+    this_exp.tips_in_lg_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
+    # this_exp.tips_in_sm_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
     # xyz calibration offset for labware (in mm), check on OT-2 app
     this_exp.slot_offsets_res = ((-0.20, 2.10, -1.30),
                                  (-1.00, -1.00, -0.80),
@@ -1459,21 +1550,11 @@ def user_config_exp():
                                  1600, 1000, 800, 600,
                                  10, 50, 100, 200, 300, 400,
                                  10, 50, 100, 200, 300, 400)  # uM (micromol/L)
-    # list of tipracks for pipettes (MODIFY if re-using/returning tips)
-    this_exp.slots_tiprack_lg = (10, 11)  # slots 1-11 on OT-2
-    # this_exp.slots_tiprack_sm = (10, 11)  # slots 1-11 on OT-2
-    this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
-                                     (-1.10, 1.50, -0.10))  # calibration offset for LARGE pipette tips
-    # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for SMALL pipette tips
-    # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85
-    # for a full set of tips, use [*range(0, 96, 1)], modify '96' for incomplete set
-    # for a rack without a full set of tips, innumerate list [0,1,...] or modify range notation
-    # eg: [*range(0, 60, 1), *range(66, 96, 1)] for rack missing 60-65
-    this_exp.tips_in_lg_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
-    # this_exp.tips_in_sm_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
+
+
 
     # list of sam_plates corresponds to index of plates 0,1,2,... (num_plates-1)
-    this_exp.slots_sam_plates = (2, 3, 6)  # slots 1-11 on OT-2 for the plates (indexed 0,1,2...)
+
     this_exp.slot_offsets_sam = ((0.00, 2.30, 0.10),
                                  (0.10, 1.40, 0.20),
                                  (-0.10, 0.80, 0.40),)  # calibration offset for labware
@@ -1569,7 +1650,7 @@ def run(protocol: protocol_api.ProtocolContext):
         first_row = check_plate.rows()[0]
         num_cols = len(first_row)
         num_rows = len(first_col)
-        last_row = check_plate.rows()[num_rows-1]
+        last_row = check_plate.rows()[num_rows - 1]
 
         cornerTL = first_row[0]
         cornerTR = first_row[num_cols - 1]
@@ -1859,8 +1940,14 @@ def run(protocol: protocol_api.ProtocolContext):
             if timestamp_now < goal_time:
                 gap_time = goal_time - timestamp_now
                 print("Delay time should be:", gap_time)
-                protocol.delay(seconds=gap_time)  # delay protocol!
-                # hold in place. pauses the notebook.
+                # MODIFY: pause notebook w/ time.sleep(), not robot
+                # otherwise it's impossible to cancel
+                # protocol.delay(seconds=gap_time)  # OT2-robot delay/sleep
+                # robot stops listening to commands while in 'delay', no way to interrupt!
+                print("Waiting ", gap_time, " seconds. To interrupt delay, press i,i.")
+                time.sleep(gap_time)  # Sleep for 30 seconds
+                # print("Done waiting ", gap_time, " seconds")
+                # hold in place. pauses the notebook too.
                 # print("Delay is done") # debug
 
             # Case: unload  (1)
