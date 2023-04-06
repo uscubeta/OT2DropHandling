@@ -76,130 +76,135 @@ class ExperimentData:
         self.zero_timestmp = 1208125
         self.now_timestmp = 1208125
 
-        # keeping track of numbers in experiment,
-        # the following values are calculated in config_samples
+        # The following values are calculated in config_samples:
+        # number of racks of type: tipracks, reservoir, or sample
         self.num_lg_tipracks = 0  # number of tiprack plates for large pipette
         self.num_sm_tipracks = 0  # number of tiprack plates for small pipette
         self.num_res_plates = 0  # number of plates holding reservoirs
         self.num_sam_plates = 0  # number of plates holding samples
-        self.num_res_tot = 0  # total number of reservoir wells
-        self.num_samples = 0  # total number of sample wells
-        self.num_wells_sam_plates = (0,)  # list of sample wells on each plate
-        self.num_wells_res_plates = (0,)  # list of reservoir wells on each plate
-        self.res_plate_max_vol = []  # uL, int list determined by reservoir plate name
-        self.tips_used = [[0, ], ]  # nested list of tips used from tip-racks
-        self.num_actions = 0  # total number of actions (planned_sequence)
-        self.completed_action = -1  # actions completed in run_sequence
+        # total number of tips, reservoirs, samples
+        self.tot_num_lg_tips = 0  # total number of lg tips
+        self.tot_num_sm_tips = 0  # total number of sm tips
+        self.tot_num_sams = 0  # total number of sample wells
+        self.tot_num_res = 0  # total number of reservoir wells
+        # number of each set waste, rinse, and solution
+        self.tot_num_waste = 0
+        self.tot_num_rinse = 0
+        self.tot_num_sol = 0
+        # total number of actions sample and dilution planned and executed
+        self.tot_num_sam_act = 0  # total number of sample actions (planned_sequence)
+        self.tot_num_dil_act = 0  # total number of sample actions (planned_sequence)
+        self.comp_sam_act = -1  # completed sample load/unload actions
+        self.comp_dil_act = -1  # completed reservoir dilution actions
 
         # slots on the OT-2 (e.g. int 1 through 11)
-        self.slots_sam_plates = ()  # well-plate slots, eg: (2, 3)
-        self.slots_reservoirs = ()  # reservoir plate slots, eg: (1, 4)
-        self.slots_tiprack_lg = ()  # large tip rack slots, eg: (10, 11)
-        self.slots_tiprack_sm = ()  # small tip rack slots, eg: (10, 11)
-        # self.which_rack = 0
-        self.which_tip = 0
-        ## location tracking via (rack id, well id)
-        self.last_lg_tip_loc = (0, 0)  # last tip location "used" in plan
-        self.last_sm_tip_loc = (0, 0)  # last tip location "used" in plan
-        self.cur_lg_tip = (-1, -1)  # currently loaded lg tip
-        self.cur_sm_tip = (-1, -1)  # currently loaded sm tip
+        self.slots_sam_plates = (0,)  # well-plate sample slots, eg: (2, 3)
+        self.slots_res_racks = (0,)  # reservoir plate slots, eg: (1, 4)
+        self.slots_tiprack_lg = (0,)  # large tip rack slots, eg: (10, 11)
+        self.slots_tiprack_sm = (0,)  # small tip rack slots, eg: (10, 11)
 
-        # labels for labware
-        self.labels_res_plates = ('label',)
-        self.labels_sam_plates = ('label',)
-        # offset for each piece of labware
-        self.slot_offsets_sam = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
-        self.slot_offsets_res = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
-        self.slot_offsets_lg_tips = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
-        self.slot_offsets_sm_tips = ((0.0, 0.0, 0.0),)  # calibration offset (x,y,z)
-        self.tips_in_lg_racks = [[*range(0, 96, 1)], ]  # nested list,
-        self.tips_in_sm_racks = [[*range(0, 96, 1)], ]  # nested list,
+        # tip location tracking via (rack_num, well_id)
+        self.available_tips_lg = ()  # list of locations for lg tips
+        self.available_tips_sm = ()  # list of locations for sm tips
+        self.which_tip_lg = 0  # index from available_tips_lg location list, used during planning
+        self.which_tip_sm = 0  # index from available_tips_sm location list, used during planning
+        self.cur_lg_tip = ()  # currently-loaded lg tip
+        self.cur_sm_tip = ()  # currently-loaded sm tip
+        self.tips_used = []  # list of tips used (wet) during solution handling
         # where 0 is A1, 1 is B1....8 is A2,... 88 is A12, ... etc to 95 for a full set of tips
-        # and each list within the nest corresponds to each rack
-        # index numbers, for plate indices, eg: (0,...10), and well indices, eg: (0,...,0,...)
-        self.res_plate_indx_nums = (0,)  # zero-index of each res plate, start at 0
-        self.res_well_indx_nums = (0,)  # zero-index of each well on res plate, start at 0
-        self.sam_plate_indx_nums = (0,)  # zero-index of each sam plate, start at 0
-        self.sam_well_indx_nums = (0,)  # zero-index of each well on sam plate, start at 0
-        # locations, consisting of (slot_indx, well_indx)
-        self.waste_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
-        self.rinse_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
-        self.sol_res_loc = ((0, 0),)  # list of locations (slot_indx, well_indx)
-        self.waste_indx = (0,)  # list of indices (subset) from all reservoirs in res_data
-        self.rinse_indx = (0,)
-        self.sol_indx = (0,)
-        # number of each set
-        self.max_num_waste = 0
-        self.max_num_rinse = 0
-        self.max_num_solut = 0
-        # currently, using these wells as:
-        self.this_indx_waste = 0
-        self.this_indx_rinse = 0
-        self.this_indx_solut = 0
+        # and each tuple within the nest corresponds to each rack, with first value slot_num
+        self.tips_in_lg_racks = ((10, [*range(0, 96, 1)]),)  # nested list of tips in rack(s)
+        self.tips_in_sm_racks = ((10, [*range(0, 96, 1)]),)  # nested list of tips in rack(s)
 
-        # reservoir info
-        self.res_plate_names = ('labware_name',)  # list of plate names
-        # self.res_plate_labels = ('labware_label',)  # replicate of above variable
-        self.res_start_vols = [10000, 10000, 0]  # current volumes for reservoirs
-        self.res_goal_vols = [10000, 10000, 0]  # final volumes for reservoirs
-        self.res_contents = ('sol1', 'sol2', 'waste')  # contents of the reservoirs
-        self.res_start_concent = (0.0, 0.0, 0.0)  # uM (micromol/L)
-        self.res_goal_concent = (0.0, 0.0, 0.0)  # uM (micromol/L)
+        # reservoir labware, eg:  'res3_60mL', 'res4_32mL', 'res6_20mL', or 'res6_40mL'
+        self.res_plate_names = ((1, 'label_name'),)  # tuple of tuples : (slot_#,'label')
+        # sample labware, eg:  'sam4_400uL' or 'sam8_400uL'
+        self.sam_plate_names = ((1, 'label_name'),)  # tuple of tuples : (slot_#,'label')
+
+        self.res_plate_wells = [
+            (1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []), ]  # ((Rack, num_wells, [well_list,]),...
+        self.sam_plate_wells = [
+            (1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []), ]  # ((Rack, num_wells, [well_list,]),...
+        # offset for each piece of labware (tuple of tuples - 4 values)
+        self.offsets_sam_racks = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
+        self.offsets_res_racks = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
+        self.offsets_lg_tiprx = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
+        self.offsets_sm_tiprx = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
+
+        # locations tuple of tuples, consisting of (slot_num, well_indx)
+        self.waste_res_loc = ((1, 0),)  # list of locations (slot_num, well_indx)
+        self.rinse_res_loc = ((1, 0),)  # list of locations (slot_num, well_indx)
+        self.sol_res_loc = ((1, 0),)  # list of locations (slot_num, well_indx)
+
+        # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
+        # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), & 'contents')
+        # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
+        # eg: zero-index of 6 well goes 0:A1, 1:B1, 2:A2, 3:B2, 4:A3, 5:B3
+        self.res_data = (((1, 0, 'res'), (0, 0), (0, 0), 'DI_sol'),)  # fill out info in user_config_exp
+        # (sam_loc, (num_inoc,(inoc_sol_loc)), (targ_incub,num_mixes,num_rinses), 'sam_name')
+        # sam_loc: (rack_num, well_id, 'sam')  # sample location - 'sam' should be last
+        # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
+        # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
+        # targ_incub: number of minutes to incubate solution on sample
+        # num_mixes: num of times incubating solution is mixed during incubation
+        # num_rinses: num of times solution is rinsed after incubation
+        self.sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol'),), (20, 3, 4), 'USCYYAuMMDDa'),)
+
+        # currently, using these wells as:
+        self.this_loc_waste = (1, 2)
+        self.this_loc_rinse = (1, 0)
+
         self.do_dilutions = False
-        self.num_cont_types = 0
+        self.content_types = ['type1', ]  # excludes waste/rinse
+        self.num_cont_types = 0  # number of self.content_types
         self.rev_dil_order = []
         self.forward_dil_or = []
-        self.res_ids = []  # same order as res_data, correlates to the input (subset from zero to num_res_tot)
-
-        # sample info
-        self.sam_plate_names = ('labware_name',)  # list of plate names
-        # self.sam_plate_labels = ('labware_label',)  # replicate of above variable
-        self.sam_names = ("sample1",)
-        self.sam_well_names = ('A1',)
-        self.sam_targ_incub_times_min = (10,)
-        self.sam_inoculation_locations = ((0, 0),)  # list of locations (slot_indx, well_indx)
-        # self.sample_targ_incub_gap_times_min = (5, )
-        self.sam_targ_num_mixes = (1,)
-        self.sam_targ_num_rinses = (1,)
-        self.sam_indx_in_order = (0,)  # matches to sample_names
-        self.sam_timing = (0,)  # points to each sample in order of events
+        # self.res_ids = []  # same order as res_data, correlates to the input (subset from zero to num_res_tot)
 
         # custom 3-well 60mL reservoir plate with 'A1', 'A2', 'A3' wells,
         self.res3_60mL_name = 'usctrayvials_3_reservoir_60000ul'
         self.res3_60mL_max_vol = 60000  # uL (max volume of above reservoir plate)
-        self.res3_60mL_label = 'res3_60mL_'
+        self.res3_60mL_label = 'Res3_60mL_'  # 3-well 60mL res plate label
         # custom 4-well 32mL reservoir plate plate with 'A1', 'A2', 'A3', 'A4' wells
         self.res4_32mL_name = 'usctrayvials_4_reservoir_32000ul'
         self.res4_32mL_max_vol = 32000  # uL (max volume of above reservoir plate)
-        self.res4_32mL_label = 'res4_32mL_'
+        self.res4_32mL_label = 'Res4_32mL_'  # 4-well 32mL res plate label
         # custom 6-well 20mL reservoir plate with (A1-3, B1-3) wells
         self.res6_20mL_name = 'usctrayvials_6_reservoir_20000ul'
         self.res6_20mL_max_vol = 20000  # uL (max volume of above reservoir plate)
-        self.res6_20mL_label = 'res6_20mL_'
+        self.res6_20mL_label = 'Res6_20mL_'  # 6-well 20mL res plate label
         # custom 6-well 40mL reservoir plate with (A1-3, B1-3) wells
         self.res6_40mL_name = 'usctrayvials_6_reservoir_40000ul'
         self.res6_40mL_max_vol = 40000  # uL (max volume of above reservoir plate)
-        self.res6_40mL_label = 'res6_40mL_'
+        self.res6_40mL_label = 'Res6_40mL_'  # 6-well 40mL res plate label
         # custom 4-well sample wellplate with 'A1', 'A2', 'A3', 'A4' wells
-        self.sam4p_400uL_name = 'usctrayfoam_4_wellplate_400ul'
-        self.sam4p_400uL_max_vol = 400  # uL (max volume of sample well-plate)
-        self.sam4p_400uL_label = 'Sam4Plate_'
+        self.sam4_400uL_name = 'usctrayfoam_4_wellplate_400ul'
+        self.sam4_400uL_max_vol = 400  # uL (max volume of sample well-plate)
+        self.sam4_400uL_label = 'Sam4Plate_'  # 4-well plate label
+        # custom 8-well sample plate w/ 'A1','B1','A2','B2','A3','B3','A4','B4' wells
+        self.sam8_400uL_name = 'usctrayfoam_8_wellplate_400ul'
+        self.sam8_400uL_max_vol = 400  # uL (max volume of sample well-plate)
+        self.sam8_400uL_label = 'Sam8Plate_'  # 8-well plate label
 
+        # large: 1000uL (1mL) pipette can dispense from 100+/-2uL to 1000+/-7uL of solution
+        # small: 20uL pipette can dispense from 1+/-0.15uL to 20+/-0.3uL of solution
+        # not loaded but available: 300uL pipette dispensing 20 to 300uL
         self.pipettes_in_use = 'large'  # 'large', 'small' or 'both'
         self.tip_rack_lg_name = 'opentrons_96_tiprack_1000ul'
         self.tip_rack_sm_name = 'opentrons_96_tiprack_20ul'
         self.pipette_lg_name = 'p1000_single_gen2'
         self.pipette_sm_name = 'p20_single_gen2'
-        self.pipette_lg_loc = 'left'
-        self.pipette_sm_loc = 'right'
+        self.pipette_lg_loc = 'left'  # pipette hardware mounted on the left
+        self.pipette_sm_loc = 'right'  # pipette hardware mounted on the right
+
         self.planned_sequence: list[ActClass] = []  # in seconds
         self.pln_seq_stamps: list[ActClass] = []  # in seconds
         self.pln_dilut_seq: list[ActClass] = []  # in seconds
         # where each tuple is (sample_index, action, start_time_s, end_time_s)
         # eg: [(0, 'load', 10, 20), (0, 'mix', 110, 120), (0, 'mix', 210, 220), (0, 'rinse', 310, 320)]
         self.all_samples: list[list[SampleWellData]] = []
-        self.res_data: list[ResWell] = []
-        self.res_data_locs: ((0, 0),)  # tuple of locations, same order as res_data
+        self.all_res_data: list[ResWell] = []
+        # self.res_data_locs: ((0, 0),)  # tuple of locations, same order as res_data
 
     def __repr__(self):
         this_string = "ExperimentData(" + str(self.exp_name) + ")"
@@ -210,35 +215,25 @@ class ExperimentData:
         return this_string
 
     def find_next_tip(self, which_pip: str):
-
+        # finds the next tip to use in experiment planning
+        # tracked via which_tip_lg and which_tip_sm
         if which_pip == 'small':
-            all_tips = self.tips_in_sm_racks
-            last_tip_loc = self.last_sm_tip_loc
-        else:
-            all_tips = self.tips_in_lg_racks
-            last_tip_loc = self.last_lg_tip_loc
-        cur_rack = last_tip_loc[0]
-        cur_well = last_tip_loc[1]
-
-        if cur_well < max(all_tips[cur_rack]):
-            # if there are more tips in the current rack
-            current_tip_indx = all_tips[cur_rack].index(cur_well)
-            new_tip = all_tips[cur_rack][(current_tip_indx + 1)]
-            new_rack = cur_rack
-        elif cur_well >= max(all_tips[cur_rack]):
-            new_rack = cur_rack + 1
-            if new_rack >= (self.num_lg_tipracks - 1):
-                print("Not enough tips! Load more tipracks before restarting.")
+            self.which_tip_sm += 1
+            if self.which_tip_sm >= self.tot_num_sm_tips:
+                str_out = "Small pipette has insufficient tips. " \
+                          "Please load more, update user_config_exp() and restart."
+                print(str_out)
                 raise StopExecution
-            new_tip = min(all_tips[new_rack])
+            new_tip = self.available_tips_sm[self.which_tip_sm]
         else:
-            # no change
-            print("ERROR: tip well out of range")
-            new_rack = cur_rack
-            new_tip = cur_well
-        new_tip_loc = (new_rack, new_tip)
-        self.last_lg_tip_loc = new_tip_loc
-        return new_tip_loc
+            self.which_tip_lg += 1
+            if self.which_tip_lg >= self.tot_num_lg_tips:
+                str_out = "Large pipette has insufficient tips. " \
+                          "Please load more, update user_config_exp() and restart."
+                print(str_out)
+                raise StopExecution
+            new_tip = self.available_tips_lg[self.which_tip_lg]
+        return new_tip
 
     def find_max_res_vol(self, this_name: str):
         volume = 0
@@ -250,8 +245,10 @@ class ExperimentData:
             volume = self.res6_20mL_max_vol
         elif this_name == self.res6_40mL_name:
             volume = self.res6_40mL_max_vol
-        elif this_name == self.sam4p_400uL_name:
-            volume = self.sam4p_400uL_max_vol
+        elif this_name == self.sam4_400uL_name:
+            volume = self.sam4_400uL_max_vol
+        elif this_name == self.sam8_400uL_name:
+            volume = self.sam8_400uL_max_vol
         return volume
 
     def find_label(self, this_name: str):
@@ -264,9 +261,41 @@ class ExperimentData:
             this_label = self.res6_20mL_label
         elif this_name == self.res6_40mL_name:
             this_label = self.res6_40mL_label
-        elif this_name == self.sam4p_400uL_name:
-            this_label = self.sam4p_400uL_label
+        elif this_name == self.sam4_400uL_name:
+            this_label = self.sam4_400uL_label
+        elif this_name == self.sam8_400uL_name:
+            this_label = self.sam8_400uL_label
         return this_label
+
+
+class ResWell:
+    def __init__(self):
+        self.contents = ''  # solution name/chemical name
+        self.curr_conc = 0  # uM (micromol/L) # used for dilutions
+        self.goal_conc = 0  # uM (micromol/L) # used for dilutions
+        self.curr_vol = 0  # uL
+        self.goal_vol = 0  # uL
+        self.max_vol = 10000  # uL
+        self.plate_slot_num = 0
+        self.well_id_num = 0
+        self.loc = (1, 0)  # (Slot_#, Well_#)
+        self.parent_sol_loc = (0, 0)
+        self.parent_conc = 0
+        self.parent_transf_vol = 0
+        self.dilution_complete = True
+        self.assigned_tip = (11, 0)  # (Slot_#, Tip_#)
+
+    # returns this when calling this object
+    def __repr__(self):
+        this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
+                      str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
+        return this_string
+
+    # returns this string when called via print(x)
+    def __str__(self):
+        this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
+                      str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
+        return this_string
 
 
 class SampleWellData:
@@ -417,37 +446,6 @@ class ActClass:
         return prev_end_stamp
 
 
-class ResWell:
-    def __init__(self):
-        self.contents = ''  # solution name/chemical name
-        self.curr_conc = 0  # uM (micromol/L) # used for dilutions
-        self.goal_conc = 0  # uM (micromol/L) # used for dilutions
-        self.curr_vol = 0  # uL
-        self.goal_vol = 0  # uL
-        self.max_vol = 10000  # uL
-        self.plate_indx_num = 0
-        self.well_indx_num = 0
-        self.loc = (0, 0)
-        self.parent_sol_loc = (0, 0)
-        self.parent_conc = 0
-        self.parent_transf_vol = 0
-        self.dilution_complete = True
-        self.assigned_tip = 0
-        self.original_indx = 0
-
-    # returns this when calling this object
-    def __repr__(self):
-        this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
-                      str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
-        return this_string
-
-    # returns this string when called via print(x)
-    def __str__(self):
-        this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
-                      str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
-        return this_string
-
-
 # define functions on these class objects
 def swap_actions(exp_sequence: List[ActClass], act_pos_this: int, act_pos_that: int):
     # swap the two actions in the list  (^ this_action, old_action)
@@ -494,7 +492,7 @@ def shift_all_for_load(exp_sequence: List[ActClass], this_sam_id: int, shift_tim
     # then sorts and prioritizes the action list
     # print("Shifting all for load of action:", sam_index)  # debug
     shift_for_load = False
-    sams_2_shift = [] # list of samples that are loaded after this_sam_id
+    sams_2_shift = []  # list of samples that are loaded after this_sam_id
     for ix in range(len(exp_sequence)):
         # find all load actions that come after sam_index load
         this_action = exp_sequence[ix]
@@ -1019,132 +1017,290 @@ def reverse_the_list(t):
         return (t[-1],) + reverse_the_list(t[:-1])
 
 
+def find_slot_in_nestedlist_4rack(res_list, slot_num: int):
+    for sub_list_indx in range(len(res_list)):
+        sub_list = res_list[sub_list_indx]
+        if slot_num == sub_list[0]:
+            return sub_list_indx
+    s_out = "Slot # " + str(slot_num) + " is not in nested list of reservoirs."
+    raise ValueError(s_out)
+
+
+def find_slot_in_dblnestedlist_4rack(res_list, find_loc: (int, int)):
+    for sub_list_indx in range(len(res_list)):
+        sub_list = res_list[sub_list_indx]
+        loc = sub_list[0]  # (Slot_#, Well_#, 'type')
+        loc = (loc[0], loc[1])
+        if find_loc == loc:
+            return sub_list_indx
+    s_out = "Location # " + str(find_loc) + " is not in nested list of reservoirs."
+    raise ValueError(s_out)
+
+
 def calc_nums_exp(exp: ExperimentData):
-    # calculate the total number from user data provided in user_config_exp
-    exp.num_samples = len(exp.sam_plate_indx_nums)
-    exp.num_sam_plates = len(exp.slots_sam_plates)
+    # derive totals from user_config_exp
+    print("===========================================================================================")  # debug
+    # calculate number of racks and plates
     exp.num_lg_tipracks = len(exp.slots_tiprack_lg)
     exp.num_sm_tipracks = len(exp.slots_tiprack_sm)
-    exp.num_res_plates = len(exp.slots_reservoirs)
-    exp.num_res_tot = len(exp.res_plate_indx_nums)
-    exp.max_num_rinse = len(exp.rinse_res_loc)
-    exp.max_num_waste = len(exp.waste_res_loc)
-    exp.max_num_solut = len(exp.sol_res_loc)
+    exp.num_res_plates = len(exp.slots_res_racks)
+    exp.num_sam_plates = len(exp.slots_sam_plates)
+
+    # check that user_config_exp was filled out correctly
+    if len(exp.offsets_res_racks) != exp.num_res_plates \
+            or len(exp.res_plate_names) != exp.num_res_plates:
+        s_out = "Number of items in offsets_res_racks or num_res_plates is incorrect."
+        print(s_out)
+        raise StopExecution
+    if len(exp.offsets_sam_racks) != exp.num_sam_plates \
+            or len(exp.sam_plate_names) != exp.num_sam_plates:
+        s_out = "Number of items in offsets_sam_racks or sam_plate_names is incorrect."
+        print(s_out)
+        raise StopExecution
+
+    # make list of wells for each res rack
+    # (slot_num, (rack_offset_xyz_mm), 'rack_name', 'rack_label',
+    # max_vol_uL, num_wells, [well_indices])
+    temp_item = [1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []]
+    temp_list = []
+    for rk_indx in range(exp.num_res_plates):
+        new_item = deepcopy(temp_item)
+        slot_num = exp.slots_res_racks[rk_indx]
+        new_item[0] = slot_num
+        indx = find_slot_in_nestedlist_4rack(exp.offsets_res_racks, slot_num)
+        off_wrack = exp.offsets_res_racks[indx]
+        new_item[1] = (off_wrack[1], off_wrack[2], off_wrack[3])
+        indx = find_slot_in_nestedlist_4rack(exp.res_plate_names, slot_num)
+        plate_name = exp.res_plate_names[indx][1]
+        new_item[2] = plate_name
+        label = exp.find_label(plate_name)
+        res_vol = exp.find_max_res_vol(plate_name)
+        new_item[3] = label + str(slot_num)
+        new_item[4] = res_vol
+        temp_list.append(new_item)
+    exp.res_plate_wells = temp_list
+    # repeat, make list of wells for each sam rack
+    temp_list = []
+    for rk_indx in range(exp.num_sam_plates):
+        new_item = deepcopy(temp_item)
+        slot_num = exp.slots_sam_plates[rk_indx]
+        new_item[0] = slot_num
+        indx = find_slot_in_nestedlist_4rack(exp.offsets_sam_racks, slot_num)
+        off_wrack = exp.offsets_sam_racks[indx]
+        new_item[1] = (off_wrack[1], off_wrack[2], off_wrack[3])
+        indx = find_slot_in_nestedlist_4rack(exp.sam_plate_names, slot_num)
+        plate_name = exp.sam_plate_names[indx][1]
+        new_item[2] = plate_name
+        label = exp.find_label(plate_name)
+        res_vol = exp.find_max_res_vol(plate_name)
+        new_item[3] = label + str(slot_num)
+        new_item[4] = res_vol
+        temp_list.append(new_item)
+    exp.sam_plate_wells = temp_list
+
+    # calculate totals for samples and reservoirs, as well as
+    # total number of waste, rinse, and solution wells
+    exp.tot_num_sams = len(exp.sam_data)
+    exp.tot_num_res = len(exp.res_data)
+    exp.tot_num_waste = len(exp.waste_res_loc)
+    exp.tot_num_rinse = len(exp.rinse_res_loc)
+    exp.tot_num_sol = exp.tot_num_res - exp.tot_num_waste - exp.tot_num_rinse
+
+    # calculate number of tips available, print info
+    if exp.pipettes_in_use == 'large' or exp.pipettes_in_use == 'both':
+        num_tips = 0
+        tip_locs = []
+        for rk_indx in exp.tips_in_lg_racks:
+            slot_num = rk_indx[0]
+            num_tips = num_tips + len(rk_indx[1])  # length of list
+            for tip in rk_indx[1]:
+                tip_loc = (slot_num, tip)
+                tip_locs.append(tip_loc)
+        exp.tot_num_lg_tips = num_tips  # total number of lg tips
+        exp.available_tips_lg = tuple(tip_locs)  # convert list to immutable tuple
+        exp.which_tip_lg = 0
+        str_out = "Loading large pipette with " + str(exp.num_lg_tipracks) + \
+                  " racks in slots: " + str(exp.slots_tiprack_lg) + \
+                  " with total number of available tips:  " + str(exp.tot_num_lg_tips)
+        print(str_out)
+    else:
+        str_out = "WARNING: without large pipette, cannot continue script."
+        print(str_out)
+        raise StopExecution
+    if exp.pipettes_in_use == 'small' or exp.pipettes_in_use == 'both':
+        num_tips = 0
+        tip_locs = []
+        for rk_indx in exp.tips_in_sm_racks:
+            slot_num = rk_indx[0]
+            num_tips = num_tips + len(rk_indx[1])  # length of list
+            for tip in rk_indx[1]:
+                tip_loc = (slot_num, tip)  # location
+                tip_locs.append(tip_loc)
+        exp.tot_num_sm_tips = num_tips  # total number of sm tips
+        exp.available_tips_sm = tuple(tip_locs)  # convert list to immutable tuple
+        exp.which_tip_sm = 0
+        str_out = "Loading small pipette with " + str(exp.num_sm_tipracks) + \
+                  " racks in slots: " + str(exp.slots_tiprack_sm) + \
+                  " with total number of available tips:  " + str(exp.tot_num_sm_tips)
+        print(str_out)
+    else:
+        str_out = "WARNING: No small pipette loaded. (Not needed for this script.)"
+        print(str_out)
+
+    # from res_data, identify number of wells in each rack and list well-numbers
+    # also, find locations for solution wells and make a list
+    sol_res_locs = []
+    start_conc = []
+    end_conc = []
+    content_types = []
+    for res in exp.res_data:
+        # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), & 'contents')
+        res_loc = res[0]  # (Slot_#, Well_#, 'res')
+        if res_loc[2] != 'res':
+            print("Warning, first item of each res_data item must be (slot_num, well_id, 'res')")
+        res_slot = res_loc[0]  # Slot_#
+        res_well = res_loc[1]  # Well_#
+        res_loc = (res_slot, res_well)
+        indx = find_slot_in_nestedlist_4rack(exp.res_plate_wells, res_slot)
+        # ((slot_num, (offsets_xyz), 'rk_name', 'rk_label', max_vol, num_wlz, [wl_indices]),)
+        exp.res_plate_wells[indx][5] += 1  # update number of wells on this plate
+        exp.res_plate_wells[indx][6].append(res_well)  # update well index list
+
+        if res_loc in exp.waste_res_loc \
+                or res_loc in exp.rinse_res_loc:
+            pass
+        else:
+            sol_res_locs.append(res_loc)  # location is in position 0 for each res item
+            start_conc.append(res[1][1])
+            end_conc.append(res[2][1])
+            type = res[3]
+            if type not in content_types:
+                content_types.append(type)
+    exp.sol_res_loc = tuple(sol_res_locs)
+    exp.content_types = content_types
+    exp.num_cont_types = len(content_types)
+    if start_conc != end_conc:
+        print("Dilutions needed.")  # debug
+        exp.do_dilutions = True
+
+    # from sam_data, identify number of wells in each sam rack and list well-numbers
+    for sam in exp.sam_data:
+        sam_loc = sam[0]  # (Slot_#, Well_#, 'sam')
+        if sam_loc[2] != 'sam':
+            print("Warning, first item of each sam_data item must be (slot_num, well_id, 'sam')")
+        sam_slot = sam_loc[0]
+        sam_well = sam_loc[1]
+        sam_loc = (sam_slot, sam_well)
+        res_locs = sam[1]  # TODO: check if this is a nested list.
+        num_inoc_res = res_locs[0]
+        for each_res in range(num_inoc_res):
+            res_loc = res_locs[each_res + 1]  #
+            res_slot = res_loc[0]  # Slot_#
+            res_well = res_loc[1]  # Well_#
+            res_loc = (res_slot, res_well)
+            if res_loc not in exp.sol_res_loc:
+                s_out = "Inoculation reservoir " + str(res_loc) \
+                        + " for sample " + str(sam_loc) \
+                        + " is invalid, check user_config_exp"
+                print(s_out)
+                raise StopExecution
+        indx = find_slot_in_nestedlist_4rack(exp.sam_plate_wells, sam_slot)
+        # ((slot_num, (offsets_xyz), 'rk_name', 'rk_label', max_vol, num_wlz, [wl_indices]),)
+        exp.sam_plate_wells[indx][5] += 1
+        exp.sam_plate_wells[indx][6].append(sam_well)
+
+    # convert res_plate_wells to immutable tuple
+    for rk_indx in range(exp.num_res_plates):
+        slot_wells = deepcopy(exp.res_plate_wells[rk_indx])
+        slot_wells[6] = tuple(slot_wells[6])  # [wl_indices] into immutable tuple
+        exp.res_plate_wells[rk_indx] = tuple(slot_wells)  # convert each rack data to tuple
+    exp.res_plate_wells = tuple(exp.res_plate_wells)  # convert res rack dataset to tuple
+    # convert sam_plate_wells to immutable tuple
+    for rk_indx in range(exp.num_sam_plates):
+        slot_wells = deepcopy(exp.sam_plate_wells[rk_indx])
+        slot_wells[6] = tuple(slot_wells[6])  # [wl_indices] into immutable tuple
+        exp.sam_plate_wells[rk_indx] = tuple(slot_wells)  # convert each rack data to tuple
+    exp.sam_plate_wells = tuple(exp.sam_plate_wells)  # convert sam rack dataset to tuple
+
+    # select starting wells/tips
+    exp.this_loc_waste = exp.waste_res_loc[0]
+    exp.this_loc_rinse = exp.rinse_res_loc[0]
+
+    # print summary:
+    # print info about reservoirs
+    for plate_index in range(exp.num_res_plates):
+        # (slot_num, (offset_xyz_mm), 'rack_label', max_vol_uL, num_wells, [well_indices])
+        plate_info = exp.res_plate_wells[plate_index]
+        str_out = "Reservoir plate on slot " + str(plate_info[0]) + " labeled " + str(plate_info[3]) \
+                  + " has " + str(plate_info[5]) + " occupied wells with max vol " \
+                  + str(plate_info[4]) + " uL "  # debug
+        print(str_out)
+    # print info about samples
+    for plate_index in range(exp.num_sam_plates):
+        plate_info = exp.sam_plate_wells[plate_index]
+        str_out = "Sample plate on slot " + str(plate_info[0]) \
+                  + " labeled " + str(plate_info[3]) \
+                  + " with " + str(plate_info[5]) \
+                  + " samples."  # debug
+        print(str_out)
+    print("===========================================================================================")  # debug
     return exp
 
 
-def check_config_exp(exp: ExperimentData):
-    # check that the number of items in user_config_experiment is consistent
-    # add command to STOP the rest of the program
-    num_sam = exp.num_samples
-    if len(exp.sam_names) != num_sam or \
-            len(exp.sam_targ_incub_times_min) != num_sam or \
-            len(exp.sam_targ_num_rinses) != num_sam or \
-            len(exp.res_start_concent) != len(exp.res_goal_concent):
-        f_out_string = "Something is off. Please check user_config_experiment()"
-        print(f_out_string)  # debug for notebook
-        # protocol.pause(f_out_string)  # debug for OT2 app
-        # MODIFY: check that other parameters are numbered correctly!
-    else:
-        f_out_string = "The user_config_experiment() was written correctly. "
-        print(f_out_string)  # debug for notebook
-        # protocol.comment(f_out_string)  # debug for OT2 app
-    return None
-
-
 def set_up_res_data(exp: ExperimentData):
+    # populates the experiment's all_res_data
+    # and determines if dilution is needed
+
     # select the first tip
-    # MODIFY: tips_in_lg_racks
-    which_pip = "large"
-    first_rack = min(exp.slots_tiprack_lg)
-    first_tip = min(exp.tips_in_lg_racks[0])  # min of tips in first rack
-    current_tip_loc = (first_rack, first_tip)  # first tip location
+    which_pipette = 'large'  # using large pipette
+    all_res_input = deepcopy(exp.res_data)
+    res_racks = deepcopy(exp.res_plate_wells)
+    next_tip_loc = exp.available_tips_lg[exp.which_tip_lg]  # first tip
+    print("Selecting first tip in loc: ", next_tip_loc)  # debug
 
-    print("Selecting tips")
-
-    # first, set up data for RESERVOIRS (solutions, waste, rinse)
-    res_locations = []
-    waste_ids = []  # indices for waste reservoirs (subset from 0 to num_res_tot)
-    rinse_ids = []  # indices for rinse reservoirs (subset from 0 to num_res_tot)
-    sol_ids = []  # indices for solution reservoirs (subset from 0 to num_res_tot)
-    tip_ids = []  # index of tips already 'used'
-    res_set = []  # list of ResWell objects (not nested), includes waste and rinse
-
-    num_plates = exp.num_res_plates
-    plate_labels = ['label'] * num_plates  # placeholder for labels to be used in OT2 labware object
-    num_wells_all_plates = [0] * num_plates  # placeholder for list of num_wells in each plate
-    max_volumes = [0.0] * num_plates  # placeholder for list of maximum volumes in reservoirs
-    all_on_prev_plates = 0  # for sample_index from 0 to num_res-1
-    for plate_index in range(num_plates):
-        # for each plate in on the deck, indexed 0 to num_plates-1
-        plate_name = exp.res_plate_names[plate_index]
-        max_volumes[plate_index] = exp.find_max_res_vol(plate_name)
-        plate_labels[plate_index] = exp.find_label(plate_name) + str(plate_index)
-        num_wells_on_this_plate = 0
-        for check_res in range(exp.num_res_tot):
-            # not the fastest way, since we go through all samples num_plates times
-            if exp.res_plate_indx_nums[check_res] == plate_index:
-                num_wells_on_this_plate = num_wells_on_this_plate + 1
-        # record the number of wells in each plate
-        num_wells_all_plates[plate_index] = num_wells_on_this_plate
-        f_out_string = "Plate " + str(plate_name) + " labeled " + str(plate_labels[plate_index]) \
-                       + " indexed " + str(plate_index) + " has " + str(num_wells_on_this_plate) \
-                       + " wells with max vol " + str(max_volumes[plate_index])  # debug
-        print(f_out_string)  # debug
-        # make (single) list of ResWell objects
-        for this_well_on_plate in range(num_wells_on_this_plate):
-            # for each well on this plate
-            this_res_indx = all_on_prev_plates + this_well_on_plate  # index from exp.res_contents
+    res_data_set = []  # list of ResWell objects (nested by rack), includes waste and rinse
+    for rack in res_racks:
+        # (slot_num, (offset_xyz_mm), 'rack_label', max_vol_uL, num_wells, [well_indices])
+        print(rack)
+        slot_num = rack[0]
+        num_wells = rack[5]
+        wells_ids = rack[6]
+        max_vol = rack[3]
+        rack_set = []
+        for well_indx in range(num_wells):
+            well_id = wells_ids[well_indx]
+            well_loc = (slot_num, well_id)
+            res_data_indx = find_slot_in_dblnestedlist_4rack(all_res_input, well_loc)
+            # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), 'contents')
+            res_data = all_res_input[res_data_indx]
             new_res = ResWell()  # new ResWell object
-            new_res.original_indx = this_res_indx  # corresponds to original indices from exp.res_contents
-            pt_indx_num = exp.res_plate_indx_nums[this_res_indx]  # same index as exp.res_plate_indx_nums
-            wl_indx_num = exp.res_well_indx_nums[this_res_indx]  # same index as exp.res_well_indx_nums
-            this_loc = (pt_indx_num, wl_indx_num)
-            new_res.plate_indx_num = pt_indx_num
-            new_res.well_indx_num = wl_indx_num
-            new_res.loc = this_loc
-            new_res.max_vol = max_volumes[plate_index]
-            new_res.curr_vol = exp.res_start_vols[this_res_indx]
-            new_res.goal_vol = exp.res_goal_vols[this_res_indx]
-            new_res.contents = exp.res_contents[this_res_indx]
-            new_res.goal_conc = exp.res_goal_concent[this_res_indx]
-            new_res.curr_conc = exp.res_start_concent[this_res_indx]
-            # assign first num_res_tot, replace if diluting
-            new_res.assigned_tip = current_tip_loc  # tuple (rack, well)
-            current_tip_loc = exp.find_next_tip(which_pip)  # find next tip loc
-            tip_ids.append(this_res_indx)  # using the res index as tip index (first set)
+            new_res.plate_slot_num = slot_num
+            new_res.well_id_num = well_id
+            new_res.loc = well_loc
+            new_res.max_vol = max_vol
+            new_res.curr_vol = res_data[1][0]
+            new_res.curr_conc = res_data[1][1]
+            new_res.goal_vol = res_data[2][0]
+            new_res.goal_conc = res_data[2][1]
+            new_res.contents = res_data[3]
             if new_res.curr_conc < new_res.goal_conc:
                 new_res.dilution_complete = False
-            res_set.append(new_res)  # this order may be out of sync with sol_res_loc
-            if this_loc in exp.waste_res_loc:
-                waste_ids.append(this_res_indx)
-            elif this_loc in exp.rinse_res_loc:
-                rinse_ids.append(this_res_indx)
-            elif this_loc in exp.sol_res_loc:
-                sol_ids.append(this_res_indx)
-                res_locations.append(this_loc)  # list of the same order as res_set data
-        all_on_prev_plates = all_on_prev_plates + num_wells_on_this_plate
-    exp.num_wells_res_plates = tuple(num_wells_all_plates)  # record as a tuple, no mods
-    exp.labels_res_plates = tuple(plate_labels)
-    exp.res_data_locs = tuple(res_locations)
-    exp.waste_indx = tuple(waste_ids)
-    exp.rinse_indx = tuple(rinse_ids)
-    exp.sol_indx = tuple(sol_ids)
-    exp.tips_used = tip_ids  # list of tuples [(rack, well), ...]
-    exp.res_data = res_set  # data for subset of original reservoir set
+            new_res.assigned_tip = next_tip_loc
+            next_tip_loc = exp.find_next_tip(which_pipette)  # find next tip loc
+            rack_set.append(new_res)
+        res_data_set.append(rack_set)  # list of ResWell objects corresponding to this rack
+    exp.all_res_data = res_data_set  # modifiable, nested list of ResWell objects
 
     return exp
 
 
 def plan_dil_series(exp: ExperimentData):
     # plan dilution series:
-
     # double-checking that dilution is required
-    if exp.res_start_concent == exp.res_goal_concent:
+    if not exp.do_dilutions:
         print("Dilution already complete")  # debug
         return exp
-
-    exp.do_dilutions = True
+    # TODO: START HERE ON 4/7/2023
     num_res_tot = exp.num_res_tot
     res_data = exp.res_data
     sam_timestamp = 0
@@ -1301,9 +1457,8 @@ def config_samples(exp: ExperimentData):
     # MODIFY description of components
 
     exp = calc_nums_exp(exp)  # calc the totals in exp
-    check_config_exp(exp)
     exp = set_up_res_data(exp)  # first, set up data for reservoirs
-    if exp.res_start_concent != exp.res_goal_concent:
+    if exp.do_dilutions:
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # second, plan dilution series
 
@@ -1445,162 +1600,124 @@ def config_samples(exp: ExperimentData):
 
 # have user fill out for each experiment
 def user_config_exp():
-    this_exp = ExperimentData()
+    # Have user fill out the user_config_exp: five steps
+    my_exp = ExperimentData()
 
     # First, select a name for the experiment and enter date, then
     # indicate if using both large or/and small pipette and then which
     # slots on the OT2 Deck will be used by the reservoir/sample/tip racks
-    this_exp.exp_name = "TestingTimeManagement"  # update every run
-    this_exp.exp_date = 20230103  # yyyymmdd # update every run
-    this_exp.pipettes_in_use = 'large'  # 'large', 'small' or 'both'
-    this_exp.slots_reservoirs = (1, 4, 5, 8, 7, 9)  # location of reservoir racks (slots 1-11)
-    this_exp.slots_sam_plates = (2, 3, 6)  # location of sample racks (slots 1-11)
-    this_exp.slots_tiprack_lg = (10, 11)  # location of large tip racks (slots 1-11)
-    # this_exp.slots_tiprack_sm = (10, 11)  # location of small tip racks (slots 1-11)
-    #  OT-2 Opentrons Deck
-    # ________________
-    # | 10 | 11 | Tr |   # load tip racks farther to the back of the deck
-    # |  7 |  8 |  9 |   # load reservoir racks closer to the fan (left)
-    # |  4 |  5 |  6 |   # load sample racks farther from the fan (right)
-    # |  1 |  2 |  3 |   # run check_offsets to confirm the xyz loc on racks
-    # ________________
+    # ========================= OT-2 Opentrons Deck Slot numbers: ========================|
+    # ___OT-2_Deck____  # locations (rack_slot_#, well_id)          |__eg__96-well_rack:__|
+    # | 10 | 11 | Tr |  # load tips farther to the back of the deck |0:A1  8:A2 --> 88:A12|
+    # |  7 |  8 |  9 |  # load res racks closer to the fan (left)   |  |    |         |   |
+    # |  4 |  5 |  6 |  # load sam racks farther from  fan (right)  |  V    V         V   |
+    # |  1 |  2 |  3 |  # run check_offsets to confirm xyz loc      |7:H1  15:H2--> 95:H12|
+    # ====================================================================================|
+    my_exp.exp_name = "TestingTimeManagement"  # update every run
+    my_exp.exp_date = 20230103  # yyyymmdd # update every run
+    my_exp.pipettes_in_use = 'large'  # 'large', 'small' or 'both'
+    # Slot locations , leave blank if not using
+    my_exp.slots_tiprack_sm = ()  # location of small tip racks
+    my_exp.slots_tiprack_lg = (10, 11)  # locations of large tip racks (slots 1-11)
+    my_exp.slots_res_racks = (1, 4, 5, 8, 7, 9)  # locs of reservoir rx (slots 1-11)
+    my_exp.slots_sam_plates = (2, 3, 6)  # locations of sample racks (slots 1-11)
 
+    # Second, indicate xyz calibration offset for each rack of labware on the deck,
+    # to keep track of where each rack is placed, indicate slot_# as the first value
+    # for offsets: (slot_#, x_val, y_val, z_val) w/ values in +/- #.# mm
+    # confirm the offsets on the OT-2 app or with check_offsets() jupyter notebook
+    # my_exp.offsets_sm_tiprx = ((10, -1.1, +1.5, -0.1),
+    #                            (6,  -0.1, +0.8, +0.4),)  # SMALL pipette tips
+    my_exp.offsets_lg_tiprx = ((10, -1.2, +1.5, +0.2),
+                               (11, -1.1, +1.5, -0.1),)  # LARGE pipette tips
+    my_exp.offsets_res_racks = ((1, -0.2, +2.1, -1.3),
+                                (4, -1.0, -1.0, -0.8),
+                                (5, -1.0, -1.0, -1.6),
+                                (8, +0.0, -2.0, -1.7),
+                                (7, -1.0, +1.0, -0.7),
+                                (9, -1.0, +0.0, -1.1),)  # reservoir racks
+    my_exp.offsets_sam_racks = ((2, +0.0, +2.3, +0.1),
+                                (3, +0.1, +1.4, +0.2),
+                                (6, +0.1, +1.0, +0.2),)  # sample racks
 
-    this_exp.slot_offsets_lg_tips = ((-1.20, 1.50, 0.20),
-                                     (-1.10, 1.50, -0.10))  # calibration offset for LARGE pipette tips
-    # this_exp.slot_offsets_sm_tips = ((-1.10, 1.50, -0.10),)  # calibration offset for SMALL pipette tips
-    # number of tips in each rack, where 0 is A1, 1 is B1....8 is A2,...etc to 85
-    # for a full set of tips, use [*range(0, 96, 1)], modify '96' for incomplete set
-    # for a rack without a full set of tips, innumerate list [0,1,...] or modify range notation
+    # Third, indicate num of tips in each rack, res/sam plate names, and which are waste/rinse
+    # For a full set of tips, use [*range(0, 96, 1)], modify '96' & for incomplete set,
+    # without a full set of tips, innumerate list [0,1,...] or modify range notation
     # eg: [*range(0, 60, 1), *range(66, 96, 1)] for rack missing 60-65
-    this_exp.tips_in_lg_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
-    # this_exp.tips_in_sm_racks = [[*range(0, 96, 1)], [*range(0, 96, 1)]]  # nested list,
-    # xyz calibration offset for labware (in mm), check on OT-2 app
-    this_exp.slot_offsets_res = ((-0.20, 2.10, -1.30),
-                                 (-1.00, -1.00, -0.80),
-                                 (-1.00, -1.00, -1.60),
-                                 (0.00, -2.00, -1.70),
-                                 (-1.00, 1.00, -0.70),
-                                 (-1.00, 0.00, -1.10),)
-    # reservoir labware, eg:  res3_60mL_name, res4_32mL_name, res6_20mL_name, res6_40mL_name
-    this_exp.res_plate_names = (this_exp.res3_60mL_name,
-                                this_exp.res3_60mL_name,
-                                this_exp.res4_32mL_name,
-                                this_exp.res4_32mL_name,
-                                this_exp.res6_40mL_name,
-                                this_exp.res6_40mL_name)  # choose one for each slot
-    # List the indices of the reservoir plates (starting at zero for the first)
-    # break to a new line to distinguish plates
-    this_exp.res_plate_indx_nums = (0, 0, 0,
-                                    1, 1, 1,
-                                    2, 2, 2, 2,
-                                    3, 3, 3, 3,
-                                    4, 4, 4, 4, 4, 4,
-                                    5, 5, 5, 5, 5, 5)  # zero-index of each plate, start at zero
-    this_exp.res_well_indx_nums = (0, 1, 2,
-                                   0, 1, 2,
-                                   0, 1, 2, 3,
-                                   0, 1, 2, 3,
-                                   0, 1, 2, 3, 4, 5,
-                                   0, 1, 2, 3, 4, 5)  # zero-index of each well on plate (L=0,...,R=3)
-    # zero-index of 6 well goes A1,B1,A2,B2,...A6,B6
+    my_exp.tips_in_sm_racks = []  # nested list, leave blank if not using
+    my_exp.tips_in_lg_racks = [(10, [*range(0, 96, 1)]),
+                               (11, [*range(0, 96, 1)]), ]  # nested list of tips in racks,
+    # sample labware, eg:  'sam4_400uL' or 'sam8_400uL'
+    my_exp.sam_plate_names = ((2, my_exp.sam4_400uL_name),
+                              (3, my_exp.sam4_400uL_name),
+                              (6, my_exp.sam4_400uL_name),)  # choose one for each slot
+    # reservoir labware, eg:  'res3_60mL', 'res4_32mL', 'res6_20mL', or 'res6_40mL'
+    my_exp.res_plate_names = ((1, my_exp.res3_60mL_name),
+                              (4, my_exp.res3_60mL_name),
+                              (5, my_exp.res4_32mL_name),
+                              (8, my_exp.res4_32mL_name),
+                              (7, my_exp.res6_20mL_name),
+                              (9, my_exp.res6_20mL_name),)  # choose one for each slot
+    # List the locations of waste reservoir wells and rinse/dilution reservoir wells:
+    my_exp.waste_res_loc = ((1, 2), (4, 2),)  # location(s) (slot_num, well_indx) for 'Waste'
+    my_exp.rinse_res_loc = ((1, 0), (4, 0),)  # location(s) (slot_num, well_indx) for 'DI_sol'
 
-    # List the locations of waste reservoir well and rinse/dilution reservoir wells
-    this_exp.waste_res_loc = ((0, 2), (1, 2))  # list of locations (slot_indx, well_indx) for waste
-    this_exp.rinse_res_loc = ((0, 0), (1, 0))  # list of locations (slot_indx, well_indx) for DI rinse
-    this_exp.sol_res_loc = ((0, 1),
-                            (1, 1),
-                            (2, 0), (2, 1), (2, 2), (2, 3),
-                            (3, 0), (3, 1), (3, 2), (3, 3),
-                            (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5),
-                            (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5))  # loc list (slot_indx, well_indx)
+    # Fourth, for each reservoir well, indicate the following:
+    # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
+    # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), 'contents')
+    # eg: zero-index of 6 well goes 0:A1, 1:B1, 2:A2, 3:B2, 4:A3, 5:B3
+    my_exp.res_data = (((1, 0, 'res'), (50000, 0), (0, 0), 'DI_sol'),
+                       ((1, 1, 'res'), (50000, 2000), (500, 2000), 'Thiol_1_sol'),
+                       ((1, 2, 'res'), (0, 0), (30000, 0), 'Waste'),
+                       ((4, 0, 'res'), (50000, 0), (0, 2000), 'DI_sol'),
+                       ((4, 1, 'res'), (50000, 2000), (500, 0), 'Thiol_2_sol'),
+                       ((4, 2, 'res'), (0, 0), (30000, 0), 'Waste'),
+                       ((5, 0, 'res'), (0, 0), (6000, 1600), 'Thiol_1_sol'),
+                       ((5, 1, 'res'), (0, 0), (6000, 1000), 'Thiol_1_sol'),
+                       ((5, 2, 'res'), (0, 0), (6000, 800), 'Thiol_1_sol'),
+                       ((5, 3, 'res'), (0, 0), (6000, 600), 'Thiol_1_sol'),
+                       ((8, 0, 'res'), (0, 0), (6000, 1600), 'Thiol_2_sol'),
+                       ((8, 1, 'res'), (0, 0), (6000, 1000), 'Thiol_2_sol'),
+                       ((8, 2, 'res'), (0, 0), (6000, 800), 'Thiol_2_sol'),
+                       ((8, 3, 'res'), (0, 0), (6000, 600), 'Thiol_2_sol'),
+                       ((7, 0, 'res'), (0, 0), (5000, 10), 'Thiol_1_sol'),
+                       ((7, 1, 'res'), (0, 0), (5000, 50), 'Thiol_1_sol'),
+                       ((7, 2, 'res'), (0, 0), (5000, 100), 'Thiol_1_sol'),
+                       ((7, 3, 'res'), (0, 0), (5000, 200), 'Thiol_1_sol'),
+                       ((7, 4, 'res'), (0, 0), (5000, 300), 'Thiol_1_sol'),
+                       ((7, 5, 'res'), (0, 0), (5000, 400), 'Thiol_1_sol'),
+                       ((9, 0, 'res'), (0, 0), (5000, 10), 'Thiol_2_sol'),
+                       ((9, 1, 'res'), (0, 0), (5000, 50), 'Thiol_2_sol'),
+                       ((9, 2, 'res'), (0, 0), (5000, 100), 'Thiol_2_sol'),
+                       ((9, 3, 'res'), (0, 0), (5000, 200), 'Thiol_2_sol'),
+                       ((9, 4, 'res'), (0, 0), (5000, 300), 'Thiol_2_sol'),
+                       ((9, 5, 'res'), (0, 0), (5000, 400), 'Thiol_2_sol'),)
 
-    # starting reservoir contents , list all: sol, rinse, waste
-    this_exp.res_contents = ('DI_sol', 'Thiol_1_sol', 'Waste',
-                             'DI_sol', 'Thiol_2_sol', 'Waste',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_1_sol', 'Thiol_1_sol', 'Thiol_1_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol',
-                             'Thiol_2_sol', 'Thiol_2_sol', 'Thiol_2_sol')  # contents of the reservoirs
+    # Fifth, for each sample on the sample plate, indicate:
+    # (sam_loc, (num_inoc,(inoc_sol_loc)), (targ_incub,num_mixes,num_rinses), 'sam_name')
+    # sam_loc: (rack_num, well_id, 'sam')  # sample location - 'sam' should be last
+    # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
+    # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
+    # targ_incub: number of minutes to incubate solution on sample
+    # num_mixes: num of times incubating solution is mixed during incubation
+    # num_rinses: num of times solution is rinsed after incubation
+    my_exp.sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol', 1.0),), (32, 3, 4), 'USC23Au0401a'),
+                       ((2, 1, 'sam'), (1, (5, 1, 'sol', 1.0),), (24, 3, 4), 'USC23Au0401b'),
+                       ((2, 2, 'sam'), (1, (5, 2, 'sol', 1.0),), (4, 3, 4), 'USC23Au0401c'),
+                       ((2, 3, 'sam'), (1, (5, 3, 'sol', 1.0),), (20, 3, 4), 'USC23Au0401d'),
+                       ((3, 0, 'sam'), (1, (8, 0, 'sol', 1.0),), (8, 3, 4), 'USC23Au0401e'),
+                       ((3, 1, 'sam'), (1, (8, 1, 'sol', 1.0),), (12, 3, 4), 'USC23Au0401f'),
+                       ((3, 2, 'sam'), (1, (8, 2, 'sol', 1.0),), (16, 3, 4), 'USC23Au0401g'),
+                       ((3, 3, 'sam'), (1, (8, 3, 'sol', 1.0),), (28, 3, 4), 'USC23Au0401h'),)
 
-    # starting reservoir volumes (1 mL = 1000 uL), list all: sol, rinse, waste
-    this_exp.res_start_vols = [50000, 50000, 0,
-                               50000, 50000, 0,
-                               0, 0, 0, 0,
-                               0, 0, 0, 0,
-                               0, 0, 0, 0, 0, 0,
-                               0, 0, 0, 0, 0, 0]
-    this_exp.res_goal_vols = [50000, 50000, 0,
-                              50000, 50000, 0,
-                              6000, 6000, 6000, 6000,
-                              6000, 6000, 6000, 6000,
-                              5000, 5000, 5000, 5000, 5000, 5000,
-                              5000, 5000, 5000, 5000, 5000, 5000]
-    this_exp.res_start_concent = (0, 2000, 0,
-                                  0, 2000, 0,
-                                  0, 0, 0, 0,
-                                  0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0,
-                                  0, 0, 0, 0, 0, 0)  # uM (micromol/L)
-    this_exp.res_goal_concent = (0, 2000, 0,
-                                 0, 2000, 0,
-                                 1600, 1000, 800, 600,
-                                 1600, 1000, 800, 600,
-                                 10, 50, 100, 200, 300, 400,
-                                 10, 50, 100, 200, 300, 400)  # uM (micromol/L)
-
-
-
-    # list of sam_plates corresponds to index of plates 0,1,2,... (num_plates-1)
-
-    this_exp.slot_offsets_sam = ((0.00, 2.30, 0.10),
-                                 (0.10, 1.40, 0.20),
-                                 (-0.10, 0.80, 0.40),)  # calibration offset for labware
-    # sample labware, eg:  sam4p_400uL_name
-    this_exp.sam_plate_names = (this_exp.sam4p_400uL_name,
-                                this_exp.sam4p_400uL_name,
-                                this_exp.sam4p_400uL_name)  # choose one for each slot
-    # the samples must be listed in order for the time being, modify code if out of order
-    # sample index will be 0,1,2,...(num_samples-1), but order of inoculation will be calculated in config_samples
-    this_exp.sam_names = ("USC22Au1221a", "USC22Au1221b", "USC22Au1221c",
-                          "USC22Au1221d", "USC22Au1221e", "USC22Au1221f",
-                          "USC22Au1221g", "USC22Au1221h")
-    # zero-index of each sample's plate
-    this_exp.sam_plate_indx_nums = (0, 0, 0,
-                                    1, 1, 1,
-                                    2, 2)  # start at zero
-    # zero-index of each sample's well on plate
-    this_exp.sam_well_indx_nums = (0, 1, 2,
-                                   0, 1, 2,
-                                   0, 1)  # (Left A1=0,...,Right A4=3)
-    this_exp.sam_inoculation_locations = ((0, 1), (1, 1), (2, 0),
-                                          (3, 0), (3, 1), (3, 2),
-                                          (4, 0), (5, 0))  # in sample order
-    this_exp.sam_targ_incub_times_min = (32, 24, 4,
-                                         20, 8, 12,
-                                         16, 28)
-    # target incubation time (min) for each sample
-    # this_exp.sample_targ_incub_gap_times_min = [1, 1, 1, 1, 1, 1, 1, 1]
-    # MODIFY code to change when mixing happens
-    this_exp.sam_targ_num_mixes = (3, 3, 3,
-                                   3, 3, 3,
-                                   3, 3)
-    # num of times incubating solution is mixed during incubation
-    this_exp.sam_targ_num_rinses = (3, 3, 3,
-                                    3, 3, 3,
-                                    3, 3)
-    # num of times incubating solution is rinsed after incubation
-    # the list of exp.num_wells_in_plate and other attributes will be filled in config_samples
-
-    # When using jupiter notebook, please check that custom labware json
-    # files have been uploaded to /labware for use with
+    # Note: When using jupiter notebook, please check that custom
+    # labware json files have been uploaded to /labware for use:
     # 'usctrayvials_3_reservoir_60000ul.json' with max_vol 60mL
     # 'usctrayvials_4_reservoir_32000ul.json' with max_vol 32mL
     # 'usctrayvials_6_reservoir_20000ul.json' with max_vol 20mL
     # 'usctrayvials_6_reservoir_40000ul.json' with max_vol 40mL
-    # 'usctrayfoam_4_wellplate_400ul.json' with max_vol 0.4mL
+    # 'usctrayfoam_4_wellplate_400ul.json'    with max_vol .4mL
+    # 'usctrayfoam_8_wellplate_400ul.json'    with max_vol .4mL
     # Additionally, check that the following hardware is in use:
     # large: 'p1000_single_gen2' on the 'left'
     # with tips: 'opentrons_96_tiprack_1000ul'
@@ -1608,7 +1725,7 @@ def user_config_exp():
     # with tips: 'opentrons_96_tiprack_20ul'
     # if not, change ExperimentData class in file.
 
-    return this_exp
+    return my_exp
 
 
 def run(protocol: protocol_api.ProtocolContext):
@@ -1704,7 +1821,7 @@ def run(protocol: protocol_api.ProtocolContext):
         for xx in range(exp.num_lg_tipracks):
             rack_slot = exp.slots_tiprack_lg[xx]
             new_tiprack = protocol.load_labware(exp.tip_rack_lg_name, rack_slot)
-            this_offset = exp.slot_offsets_lg_tips[xx]
+            this_offset = exp.offsets_lg_tiprx[xx]
             new_tiprack.set_offset(this_offset[0], this_offset[1], this_offset[2])
             tips_lg.append(new_tiprack)
         pipette_lg = protocol.load_instrument(exp.pipette_lg_name, exp.pipette_lg_loc, tip_racks=tips_lg)
@@ -1713,8 +1830,8 @@ def run(protocol: protocol_api.ProtocolContext):
         raise StopExecution
 
     tip_rack_lg = tips_lg[0]  # choose one of the racks
-    reservoir_plates = load_plates(exp.slots_reservoirs, exp.res_plate_names,
-                                   exp.labels_res_plates, exp.slot_offsets_res)
+    reservoir_plates = load_plates(exp.slots_res_racks, exp.res_plate_names,
+                                   exp.labels_res_plates, exp.offsets_res_racks)
 
     rinse_res_arr = make_well_array(reservoir_plates, exp.rinse_res_loc)  # array of rinse well objects (NOT nested)
     waste_res_arr = make_well_array(reservoir_plates, exp.waste_res_loc)  # array of waste well objects (NOT nested)
@@ -1734,7 +1851,7 @@ def run(protocol: protocol_api.ProtocolContext):
     empty_volume = int(1.5 * well_volume)  # max volume to remove
 
     sample_plates = load_plates(exp.slots_sam_plates, exp.sam_plate_names,
-                                exp.labels_sam_plates, exp.slot_offsets_sam)
+                                exp.labels_sam_plates, exp.offsets_sam_racks)
 
     rate = exp.exp_rate_fraction
     set_speeds(rate)
@@ -1753,12 +1870,12 @@ def run(protocol: protocol_api.ProtocolContext):
 
     def check_rinse_empty(well_data):
         ## MODIFY: use subset of res_data?
-        well_data = exp.rinse_data[exp.this_indx_rinse]
+        well_data = exp.rinse_data[exp.this_loc_rinse]
         if well_data.curr_vol < 1000:
             print("This rinse reservoir is empty. Switching to next.")
-            exp.this_indx_rinse = exp.this_indx_rinse + 1  # increment to next rinse index
+            exp.this_loc_rinse = exp.this_loc_rinse + 1  # increment to next rinse index
             # DOES THIS MODIFY THE GLOBAL VARIABLE?
-            if exp.this_indx_rinse >= exp.max_num_rinse:
+            if exp.this_loc_rinse >= exp.max_num_rinse:
                 print("We have run out of rinse solution!")
                 print("Human input needed!")
                 raise StopExecution
@@ -1769,9 +1886,9 @@ def run(protocol: protocol_api.ProtocolContext):
     def check_waste_full(well_data):
         if (well_data.curr_vol + 1000) > well_data.max_vol:
             print("This waste reservoir is full. Switching to next.")
-            exp.this_indx_waste = exp.this_indx_waste + 1  # increment to next rinse index
+            exp.this_loc_waste = exp.this_loc_waste + 1  # increment to next rinse index
             # DOES THIS MODIFY THE GLOBAL VARIABLE?
-            if exp.this_indx_waste >= exp.max_num_waste:
+            if exp.this_loc_waste >= exp.max_num_waste:
                 print("No space left for waste collection!")
                 print("Human input needed!")
                 raise StopExecution
@@ -1928,10 +2045,10 @@ def run(protocol: protocol_api.ProtocolContext):
                 swap_tips(which_tip, which_pip)
 
             ## MODIFY: use subset of res_data?
-            waste_data = exp.waste_data[exp.this_indx_waste]  # choose waste data_set (alias)
-            rinse_data = exp.rinse_data[exp.this_indx_rinse]  # choose rinse data_set (alias)
-            this_rinse = rinse_res_arr[exp.this_indx_rinse]  # Labware well object for protocol use
-            this_waste = waste_res_arr[exp.this_indx_waste]  # Labware well object for protocol use
+            waste_data = exp.waste_data[exp.this_loc_waste]  # choose waste data_set (alias)
+            rinse_data = exp.rinse_data[exp.this_loc_rinse]  # choose rinse data_set (alias)
+            this_rinse = rinse_res_arr[exp.this_loc_rinse]  # Labware well object for protocol use
+            this_waste = waste_res_arr[exp.this_loc_waste]  # Labware well object for protocol use
 
             goal_time = this_action.start - 10  # start action within 10 seconds of start/end time
             action_type = this_action.action
