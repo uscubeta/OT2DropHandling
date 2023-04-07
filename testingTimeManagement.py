@@ -121,10 +121,6 @@ class ExperimentData:
         # sample labware, eg:  'sam4_400uL' or 'sam8_400uL'
         self.sam_plate_names = ((1, 'label_name'),)  # tuple of tuples : (slot_#,'label')
 
-        self.res_plate_wells = [
-            (1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []), ]  # ((Rack, num_wells, [well_list,]),...
-        self.sam_plate_wells = [
-            (1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []), ]  # ((Rack, num_wells, [well_list,]),...
         # offset for each piece of labware (tuple of tuples - 4 values)
         self.offsets_sam_racks = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
         self.offsets_res_racks = ((1, 0.0, 0.0, 0.0),)  # calibration offset (slot_#, x,y,z)
@@ -204,6 +200,8 @@ class ExperimentData:
         # eg: [(0, 'load', 10, 20), (0, 'mix', 110, 120), (0, 'mix', 210, 220), (0, 'rinse', 310, 320)]
         self.all_samples: list[list[SampleWellData]] = []
         self.all_res_data: list[ResWell] = []
+        self.res_plate_wells: list[RackData] = []
+        self.sam_plate_wells: list[RackData] = []
         # self.res_data_locs: ((0, 0),)  # tuple of locations, same order as res_data
 
     def __repr__(self):
@@ -268,6 +266,32 @@ class ExperimentData:
         return this_label
 
 
+class RackData:
+    def __init__(self, slot_num: int, res_type: str):
+        self.slot = slot_num  # slot_# on OT-2 Deck (slots 1-11)
+        self.type = res_type  # 'res' or 'sam'
+        self.offset = (0.0, 0.0, 0.0)
+        self.name = ""
+        self.label = ""
+        self.max_vol = 0
+        self.num_wells = 0
+        self.well_ids = []
+
+    # returns this when calling this object
+    def __repr__(self):
+        this_string = str(self.type) + " rack in slot #" + str(self.slot) + " named " + str(self.name) + \
+                      ", labeled " + str(self.label) + " with " + str(self.num_wells) + \
+                      " wells of max vol " + str(self.max_vol) + "uL, indexed " + str(self.well_ids)
+        return this_string
+
+    # returns this string when called via print(x)
+    def __str__(self):
+        this_string = str(self.type) + " rack in slot #" + str(self.slot) + " named " + str(self.name) + \
+                      ", labeled " + str(self.label) + " with " + str(self.num_wells) + \
+                      " wells of max vol " + str(self.max_vol) + "uL, indexed " + str(self.well_ids)
+        return this_string
+
+
 class ResWell:
     def __init__(self):
         self.contents = ''  # solution name/chemical name
@@ -293,8 +317,11 @@ class ResWell:
 
     # returns this string when called via print(x)
     def __str__(self):
-        this_string = "( ResWell in loc: " + str(self.loc) + " w/ vol " + \
-                      str(self.curr_vol) + " out of " + str(self.max_vol) + ")"
+        this_string = "(Res, loc: " + str(self.loc) + " w/ tip: " + str(self.assigned_tip) + \
+                      " w/ contents: " + str(self.contents) + " w/ max vol " + str(self.max_vol) + \
+                      "starting (vol,conc): (" + str(self.curr_vol) + ", " + str(self.curr_conc) + ")" + \
+                      "ending (vol,conc): (" + str(self.goal_vol) + ", " + str(self.goal_conc) + ")" + \
+                      "w/ dil. complete: " + str(self.dilution_complete)
         return this_string
 
 
@@ -1017,12 +1044,15 @@ def reverse_the_list(t):
         return (t[-1],) + reverse_the_list(t[:-1])
 
 
-def find_slot_in_nestedlist_4rack(res_list, slot_num: int):
-    for sub_list_indx in range(len(res_list)):
-        sub_list = res_list[sub_list_indx]
-        if slot_num == sub_list[0]:
-            return sub_list_indx
-    s_out = "Slot # " + str(slot_num) + " is not in nested list of reservoirs."
+
+
+def find_list_rack_data(rack_list: list[RackData], slot_num: int):
+    list_length = len(rack_list)
+    for indx in range(list_length):
+        rack = rack_list[indx]
+        if rack.slot == slot_num:
+            return indx
+    s_out = "Slot # " + str(slot_num) + " is not in this list of reservoirs!"
     raise ValueError(s_out)
 
 
@@ -1040,61 +1070,83 @@ def find_slot_in_dblnestedlist_4rack(res_list, find_loc: (int, int)):
 def calc_nums_exp(exp: ExperimentData):
     # derive totals from user_config_exp
     print("===========================================================================================")  # debug
+    # Todo: Print info about slots in deck order: text picture?
+
     # calculate number of racks and plates
     exp.num_lg_tipracks = len(exp.slots_tiprack_lg)
     exp.num_sm_tipracks = len(exp.slots_tiprack_sm)
     exp.num_res_plates = len(exp.slots_res_racks)
     exp.num_sam_plates = len(exp.slots_sam_plates)
 
+    all_slots = list(exp.slots_res_racks) + list(exp.slots_sam_plates) + \
+                list(exp.slots_tiprack_lg) + list(exp.slots_tiprack_sm)
+
+    all_slots.sort()  # sort in ascending order
+    for each in all_slots:
+        if each < 1 or each > 11:
+            s_out = "WARNING: Listed slot: " + str(each) + " is out of range! Check user_config_exp and retry."
+            print(s_out)
+            raise StopExecution
+        num_times = all_slots.count(each)
+        if num_times > 1:
+            s_out = "WARNING: Listed slot: " + str(each) + " used more than once! Check user_config_exp and retry."
+            print(s_out)
+            raise StopExecution
+
     # check that user_config_exp was filled out correctly
     if len(exp.offsets_res_racks) != exp.num_res_plates \
             or len(exp.res_plate_names) != exp.num_res_plates:
-        s_out = "Number of items in offsets_res_racks or num_res_plates is incorrect."
+        s_out = "Number of items in offsets_res_racks or num_res_plates is incorrect. Check user_config_exp and retry."
         print(s_out)
         raise StopExecution
     if len(exp.offsets_sam_racks) != exp.num_sam_plates \
             or len(exp.sam_plate_names) != exp.num_sam_plates:
-        s_out = "Number of items in offsets_sam_racks or sam_plate_names is incorrect."
+        s_out = "Number of items in offsets_sam_racks or sam_plate_names is incorrect. Check user_config_exp and retry."
         print(s_out)
         raise StopExecution
 
-    # make list of wells for each res rack
-    # (slot_num, (rack_offset_xyz_mm), 'rack_name', 'rack_label',
-    # max_vol_uL, num_wells, [well_indices])
-    temp_item = [1, (+0.1, +0.1, +0.1), 'name', 'label_', 10, 0, []]
+    def find_slot_in_nestedlist_4rack(res_list, slot_num: int):
+        # TODO: RETURN HERE 4/8/23
+        # returns index of item
+        for sub_list_indx in range(len(res_list)):
+            sub_list = res_list[sub_list_indx]
+            if slot_num == sub_list[0]:
+                return sub_list_indx
+        s_out = "Slot # " + str(slot_num) + " is not in the nested list."
+        raise ValueError(s_out)
+
+    # make a list of RackData items for each res rack
     temp_list = []
-    for rk_indx in range(exp.num_res_plates):
-        new_item = deepcopy(temp_item)
-        slot_num = exp.slots_res_racks[rk_indx]
-        new_item[0] = slot_num
+    for slot_num in exp.slots_res_racks:
+        new_item = RackData(slot_num, 'res')
         indx = find_slot_in_nestedlist_4rack(exp.offsets_res_racks, slot_num)
         off_wrack = exp.offsets_res_racks[indx]
-        new_item[1] = (off_wrack[1], off_wrack[2], off_wrack[3])
+        new_item.offset = (off_wrack[1], off_wrack[2], off_wrack[3])
         indx = find_slot_in_nestedlist_4rack(exp.res_plate_names, slot_num)
         plate_name = exp.res_plate_names[indx][1]
-        new_item[2] = plate_name
+        new_item.name = plate_name
         label = exp.find_label(plate_name)
         res_vol = exp.find_max_res_vol(plate_name)
-        new_item[3] = label + str(slot_num)
-        new_item[4] = res_vol
+        new_item.label = str(label) + str(slot_num)
+        new_item.max_vol = res_vol
+        print(new_item)  # debug
         temp_list.append(new_item)
     exp.res_plate_wells = temp_list
-    # repeat, make list of wells for each sam rack
+    # make a list of RackData items for each sam rack
     temp_list = []
-    for rk_indx in range(exp.num_sam_plates):
-        new_item = deepcopy(temp_item)
-        slot_num = exp.slots_sam_plates[rk_indx]
-        new_item[0] = slot_num
+    for slot_num in exp.slots_sam_plates:
+        new_item = RackData(slot_num, 'sam')
         indx = find_slot_in_nestedlist_4rack(exp.offsets_sam_racks, slot_num)
         off_wrack = exp.offsets_sam_racks[indx]
-        new_item[1] = (off_wrack[1], off_wrack[2], off_wrack[3])
+        new_item.offset = (off_wrack[1], off_wrack[2], off_wrack[3])
         indx = find_slot_in_nestedlist_4rack(exp.sam_plate_names, slot_num)
         plate_name = exp.sam_plate_names[indx][1]
-        new_item[2] = plate_name
+        new_item.name = plate_name
         label = exp.find_label(plate_name)
         res_vol = exp.find_max_res_vol(plate_name)
-        new_item[3] = label + str(slot_num)
-        new_item[4] = res_vol
+        new_item.label = str(label) + str(slot_num)
+        new_item.max_vol = res_vol
+        print(new_item)  # debug
         temp_list.append(new_item)
     exp.sam_plate_wells = temp_list
 
@@ -1149,52 +1201,57 @@ def calc_nums_exp(exp: ExperimentData):
 
     # from res_data, identify number of wells in each rack and list well-numbers
     # also, find locations for solution wells and make a list
+    # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), & 'contents')
     sol_res_locs = []
     start_conc = []
     end_conc = []
     content_types = []
-    for res in exp.res_data:
+    type = 'res'
+    res_input = deepcopy(exp.res_data)  # res_data contents in user_config_exp()
+    for in_res in res_input:
         # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), & 'contents')
-        res_loc = res[0]  # (Slot_#, Well_#, 'res')
-        if res_loc[2] != 'res':
+        res_loc = in_res[0]  # (Slot_#, Well_#, 'res')
+        starting = in_res[1]  # (start_vol_uL, start_conc_uM)
+        ending = in_res[2]  # (end_vol_uL, end_conc_uM)
+        content = in_res[3]  # res_data contents in user_config_exp()
+        if res_loc[2] != type:
             print("Warning, first item of each res_data item must be (slot_num, well_id, 'res')")
         res_slot = res_loc[0]  # Slot_#
         res_well = res_loc[1]  # Well_#
-        res_loc = (res_slot, res_well)
-        indx = find_slot_in_nestedlist_4rack(exp.res_plate_wells, res_slot)
-        # ((slot_num, (offsets_xyz), 'rk_name', 'rk_label', max_vol, num_wlz, [wl_indices]),)
-        exp.res_plate_wells[indx][5] += 1  # update number of wells on this plate
-        exp.res_plate_wells[indx][6].append(res_well)  # update well index list
-
-        if res_loc in exp.waste_res_loc \
-                or res_loc in exp.rinse_res_loc:
+        res_loc = (res_slot, res_well)  # (Slot_#, Well_#)
+        indx = find_list_rack_data(exp.res_plate_wells, res_slot)  # indx from list of RackData
+        exp.res_plate_wells[indx].num_wells += 1  # update number of wells on this plate
+        exp.res_plate_wells[indx].well_ids.append(res_well)  # update well index list
+        if res_loc in exp.waste_res_loc or res_loc in exp.rinse_res_loc:
             pass
         else:
             sol_res_locs.append(res_loc)  # location is in position 0 for each res item
-            start_conc.append(res[1][1])
-            end_conc.append(res[2][1])
-            type = res[3]
-            if type not in content_types:
-                content_types.append(type)
+            start_conc.append(starting[1])
+            end_conc.append(ending[1])
+            if content not in content_types:
+                content_types.append(content)
     exp.sol_res_loc = tuple(sol_res_locs)
     exp.content_types = content_types
     exp.num_cont_types = len(content_types)
+    for rack in exp.res_plate_wells:
+        rack.well_ids = tuple(rack.well_ids)
     if start_conc != end_conc:
         print("Dilutions needed.")  # debug
         exp.do_dilutions = True
 
     # from sam_data, identify number of wells in each sam rack and list well-numbers
-    for sam in exp.sam_data:
-        sam_loc = sam[0]  # (Slot_#, Well_#, 'sam')
+    sam_input = deepcopy(exp.res_data)  # res_data contents in user_config_exp()
+    for in_sam in sam_input:
+        sam_loc = in_sam[0]  # (Slot_#, Well_#, 'sam')
+        res_locs = in_sam[1]  # (num_sol, (rack_num, well_id, 'sol', vol_frac),...)
         if sam_loc[2] != 'sam':
             print("Warning, first item of each sam_data item must be (slot_num, well_id, 'sam')")
         sam_slot = sam_loc[0]
         sam_well = sam_loc[1]
         sam_loc = (sam_slot, sam_well)
-        res_locs = sam[1]  # TODO: check if this is a nested list.
-        num_inoc_res = res_locs[0]
-        for each_res in range(num_inoc_res):
-            res_loc = res_locs[each_res + 1]  #
+        num_inoc_res = res_locs[0]  # number of inoculation solutions
+        for each_res in range(1, num_inoc_res):
+            res_loc = res_locs[each_res]  # for each inoc res loc listed in user_config_exp()
             res_slot = res_loc[0]  # Slot_#
             res_well = res_loc[1]  # Well_#
             res_loc = (res_slot, res_well)
@@ -1204,23 +1261,11 @@ def calc_nums_exp(exp: ExperimentData):
                         + " is invalid, check user_config_exp"
                 print(s_out)
                 raise StopExecution
-        indx = find_slot_in_nestedlist_4rack(exp.sam_plate_wells, sam_slot)
-        # ((slot_num, (offsets_xyz), 'rk_name', 'rk_label', max_vol, num_wlz, [wl_indices]),)
-        exp.sam_plate_wells[indx][5] += 1
-        exp.sam_plate_wells[indx][6].append(sam_well)
-
-    # convert res_plate_wells to immutable tuple
-    for rk_indx in range(exp.num_res_plates):
-        slot_wells = deepcopy(exp.res_plate_wells[rk_indx])
-        slot_wells[6] = tuple(slot_wells[6])  # [wl_indices] into immutable tuple
-        exp.res_plate_wells[rk_indx] = tuple(slot_wells)  # convert each rack data to tuple
-    exp.res_plate_wells = tuple(exp.res_plate_wells)  # convert res rack dataset to tuple
-    # convert sam_plate_wells to immutable tuple
-    for rk_indx in range(exp.num_sam_plates):
-        slot_wells = deepcopy(exp.sam_plate_wells[rk_indx])
-        slot_wells[6] = tuple(slot_wells[6])  # [wl_indices] into immutable tuple
-        exp.sam_plate_wells[rk_indx] = tuple(slot_wells)  # convert each rack data to tuple
-    exp.sam_plate_wells = tuple(exp.sam_plate_wells)  # convert sam rack dataset to tuple
+        indx = find_list_rack_data(exp.res_plate_wells, sam_slot)
+        exp.sam_plate_wells[indx].num_wells += 1  # update number of wells on this plate
+        exp.sam_plate_wells[indx].well_ids.append(sam_well)  # update well index list
+    for rack in exp.sam_plate_wells:
+        rack.well_ids = tuple(rack.well_ids)
 
     # select starting wells/tips
     exp.this_loc_waste = exp.waste_res_loc[0]
@@ -1228,20 +1273,15 @@ def calc_nums_exp(exp: ExperimentData):
 
     # print summary:
     # print info about reservoirs
-    for plate_index in range(exp.num_res_plates):
-        # (slot_num, (offset_xyz_mm), 'rack_label', max_vol_uL, num_wells, [well_indices])
-        plate_info = exp.res_plate_wells[plate_index]
-        str_out = "Reservoir plate on slot " + str(plate_info[0]) + " labeled " + str(plate_info[3]) \
-                  + " has " + str(plate_info[5]) + " occupied wells with max vol " \
-                  + str(plate_info[4]) + " uL "  # debug
+    for plate in exp.res_plate_wells:
+        str_out = "Reservoir plate on slot " + str(plate.slot) + " labeled " + str(plate.label) \
+                  + " has " + str(plate.num_wells) + " occupied wells with max vol " \
+                  + str(plate.max_vol) + " uL "  # debug
         print(str_out)
     # print info about samples
-    for plate_index in range(exp.num_sam_plates):
-        plate_info = exp.sam_plate_wells[plate_index]
-        str_out = "Sample plate on slot " + str(plate_info[0]) \
-                  + " labeled " + str(plate_info[3]) \
-                  + " with " + str(plate_info[5]) \
-                  + " samples."  # debug
+    for plate in exp.sam_plate_wells:
+        str_out = "Sample plate on slot " + str(plate.slot) + " labeled "\
+                  + str(plate.label) + " with " + str(plate.num_wells) + " samples."  # debug
         print(str_out)
     print("===========================================================================================")  # debug
     return exp
@@ -1259,6 +1299,7 @@ def set_up_res_data(exp: ExperimentData):
     print("Selecting first tip in loc: ", next_tip_loc)  # debug
 
     res_data_set = []  # list of ResWell objects (nested by rack), includes waste and rinse
+    print("(slot_num, (offset_xyz_mm), 'rack_label', max_vol_uL, num_wells, [well_indices])")
     for rack in res_racks:
         # (slot_num, (offset_xyz_mm), 'rack_label', max_vol_uL, num_wells, [well_indices])
         print(rack)
@@ -1287,6 +1328,7 @@ def set_up_res_data(exp: ExperimentData):
                 new_res.dilution_complete = False
             new_res.assigned_tip = next_tip_loc
             next_tip_loc = exp.find_next_tip(which_pipette)  # find next tip loc
+            print(new_res)  # debug
             rack_set.append(new_res)
         res_data_set.append(rack_set)  # list of ResWell objects corresponding to this rack
     exp.all_res_data = res_data_set  # modifiable, nested list of ResWell objects
@@ -1301,39 +1343,36 @@ def plan_dil_series(exp: ExperimentData):
         print("Dilution already complete")  # debug
         return exp
     # TODO: START HERE ON 4/7/2023
-    num_res_tot = exp.num_res_tot
-    res_data = exp.res_data
-    sam_timestamp = 0
-    content_types = []
-    for each in range(num_res_tot):
-        # looping through all reservoirs to find ones with the same contents
-        new_cont = res_data[each].contents
-        if new_cont not in content_types:
-            if new_cont != 'Waste' and new_cont != 'DI_sol':
-                print("adding a new type:", new_cont)
-                content_types.append(new_cont)
-    exp.num_cont_types = len(content_types)
+    # num_res_tot = exp.tot_num_sol
+    # num_res_racks = exp.num_res_plates
+    # res_racks = deepcopy(exp.res_plate_wells)
 
-    for this_type in content_types:
+    res_data = deepcopy(exp.all_res_data)  # nested list
+    sam_timestamp = 0
+
+    res_set_per_content = []
+    for this_type in exp.content_types:
         print(this_type)  # debug
-        res_subset = []
-        for each in range(num_res_tot):
-            check_contents = res_data[each].contents
-            # this_res = res_data[each]  # debug
-            # print(check_contents, this_res.loc, this_res.dilution_complete)  # debug
-            if check_contents == this_type:
-                res_subset.append(res_data[each])
+        res_subset = []  # empty sublist of one content type
+        for res_rack in res_data:
+            for res in res_rack:
+                check_contents = res.contents
+                if check_contents == this_type:
+                    res_subset.append(res)
+                    # print(check_contents, res.loc, res.dilution_complete)  # debug
         res_subset.sort(key=lambda x: x.goal_conc, reverse=False)  # sort subset by goal_conc
+        # res_set_per_content.append(res_subset)
+        for each in res_subset:
+            print(each.loc, "  ", each.curr_vol, "  ",
+                  each.goal_vol, "  ", each.goal_conc,
+                  "  ", each.curr_conc)  # debug
         num_subset = len(res_subset)
-        # for each in res_subset:
-        #     print(each.loc, "  ", each.curr_vol, "  ",
-        #           each.goal_vol, "  ", each.goal_conc,
-        #           "  ", each.curr_conc)  # debug
-        for each in range(num_subset - 1):
+        for each in range(num_subset):
+            # for each in range(num_subset - 1):
             this_res = res_subset[each]
-            # print("________________________________________________________")
-            # print("Evaluating", this_res.loc, " with concentration: ",
-            #       this_res.goal_conc, " uM and volume ", this_res.goal_vol, "uL")  # debug
+            print("________________________________________________________")
+            print("Evaluating", this_res.loc, " with concentration: ",
+                  this_res.goal_conc, " uM and volume ", this_res.goal_vol, "uL")  # debug
             if not this_res.dilution_complete:
                 tran_mod = 1
                 transf_vol = 0
@@ -1344,14 +1383,14 @@ def plan_dil_series(exp: ExperimentData):
                 while tran_mod > 0:
                     loop_num += 1
                     parent_id += 1
-                    # print("pipette cannot transfer: ", tran_mod)  # debug
-                    # print("checking parent id", parent_id)  # debug
+                    print("pipette cannot transfer: ", tran_mod)  # debug
+                    print("checking parent id", parent_id)  # debug
                     if parent_id >= num_subset or loop_num > 10:
                         print("alternative dilution parent not available for reservoir in loc ", this_res.loc)
                         break
                     parent_res = res_subset[parent_id]
-                    # print("Parent for dilution ", parent_res.loc,
-                    #       " with concentration ", parent_res.goal_conc, " uM")
+                    print("Parent for dilution ", parent_res.loc,
+                          " with concentration ", parent_res.goal_conc, " uM")
                     # ratio of child to parent concentration
                     conc_ratio_chi_par = this_res.goal_conc / parent_res.goal_conc
                     transf_vol = int(conc_ratio_chi_par * this_res.goal_vol)
@@ -1456,8 +1495,8 @@ def config_samples(exp: ExperimentData):
     # (list of lists of objects of class SampleWell !)
     # MODIFY description of components
 
-    exp = calc_nums_exp(exp)  # calc the totals in exp
-    exp = set_up_res_data(exp)  # first, set up data for reservoirs
+    exp = calc_nums_exp(exp)  # first, calc the totals in exp, set up rack data, print rack info
+    exp = set_up_res_data(exp)  # second, set up data for reservoirs
     if exp.do_dilutions:
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # second, plan dilution series
@@ -1667,10 +1706,10 @@ def user_config_exp():
     # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), 'contents')
     # eg: zero-index of 6 well goes 0:A1, 1:B1, 2:A2, 3:B2, 4:A3, 5:B3
     my_exp.res_data = (((1, 0, 'res'), (50000, 0), (0, 0), 'DI_sol'),
-                       ((1, 1, 'res'), (50000, 2000), (500, 2000), 'Thiol_1_sol'),
+                       ((1, 1, 'res'), (50000, 2000), (0, 2000), 'Thiol_1_sol'),
                        ((1, 2, 'res'), (0, 0), (30000, 0), 'Waste'),
-                       ((4, 0, 'res'), (50000, 0), (0, 2000), 'DI_sol'),
-                       ((4, 1, 'res'), (50000, 2000), (500, 0), 'Thiol_2_sol'),
+                       ((4, 0, 'res'), (50000, 0), (0, 0), 'DI_sol'),
+                       ((4, 1, 'res'), (50000, 2000), (0, 2000), 'Thiol_2_sol'),
                        ((4, 2, 'res'), (0, 0), (30000, 0), 'Waste'),
                        ((5, 0, 'res'), (0, 0), (6000, 1600), 'Thiol_1_sol'),
                        ((5, 1, 'res'), (0, 0), (6000, 1000), 'Thiol_1_sol'),
