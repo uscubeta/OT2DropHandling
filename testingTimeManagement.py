@@ -147,10 +147,12 @@ class ExperimentData:
         self.sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol'),), (20, 3, 4), 'USCYYAuMMDDa'),)
 
         # currently, using these wells as:
-        self.this_loc_waste = (1, 2)
-        self.this_loc_rinse = (1, 0)
+        self.cur_waste = (1, 2)
+        self.cur_rinse = (1, 0)
 
         self.do_dilutions = False
+        self.start_dry = True
+        self.store_dry = False
         self.content_types = ['type1', ]  # excludes waste/rinse
         self.num_cont_types = 0  # number of self.content_types
         self.rev_dil_order = []
@@ -193,13 +195,13 @@ class ExperimentData:
         self.pipette_lg_loc = 'left'  # pipette hardware mounted on the left
         self.pipette_sm_loc = 'right'  # pipette hardware mounted on the right
 
-        self.planned_sequence: list[ActClass] = []  # in seconds
-        self.pln_seq_stamps: list[ActClass] = []  # in seconds
-        self.pln_dilut_seq: list[ActClass] = []  # in seconds
+        self.planned_sequence: list[ActionInfo] = []  # in seconds
+        self.pln_seq_stamps: list[ActionInfo] = []  # in seconds
+        self.pln_dilut_seq: list[ActionInfo] = []  # in seconds
         # where each tuple is (sample_index, action, start_time_s, end_time_s)
         # eg: [(0, 'load', 10, 20), (0, 'mix', 110, 120), (0, 'mix', 210, 220), (0, 'rinse', 310, 320)]
         self.all_samples: list[list[SamWellData]] = []
-        self.all_res_data: list[ResWellData] = []
+        self.all_res_data: list[list[ResWellData]] = []
         self.res_plate_wells: list[RackData] = []
         self.sam_plate_wells: list[RackData] = []
         # self.res_data_locs: ((0, 0),)  # tuple of locations, same order as res_data
@@ -216,6 +218,7 @@ class ExperimentData:
         # finds the next tip to use in experiment planning
         # tracked via which_tip_lg and which_tip_sm
         if which_pip == 'small':
+            self.cur_sm_tip = self.available_tips_sm[self.which_tip_sm]
             self.which_tip_sm += 1
             if self.which_tip_sm >= self.tot_num_sm_tips:
                 str_out = "Small pipette has insufficient tips. " \
@@ -224,6 +227,7 @@ class ExperimentData:
                 raise StopExecution
             new_tip = self.available_tips_sm[self.which_tip_sm]
         else:
+            self.cur_lg_tip = self.available_tips_lg[self.which_tip_lg]
             self.which_tip_lg += 1
             if self.which_tip_lg >= self.tot_num_lg_tips:
                 str_out = "Large pipette has insufficient tips. " \
@@ -232,6 +236,18 @@ class ExperimentData:
                 raise StopExecution
             new_tip = self.available_tips_lg[self.which_tip_lg]
         return new_tip
+
+    def find_next_rinse(self, current_rinse: (int, int)):
+        this_indx = self.rinse_res_loc.index(current_rinse)
+        next_indx = this_indx + 1
+        new_rinse = self.rinse_res_loc[next_indx]
+        return new_rinse
+
+    def find_next_waste(self, current_waste: (int, int)):
+        this_indx = self.waste_res_loc.index(current_waste)
+        next_indx = this_indx + 1
+        new_waste = self.waste_res_loc[next_indx]
+        return new_waste
 
     def find_max_res_vol(self, this_name: str):
         volume = 0
@@ -295,17 +311,18 @@ class RackData:
 class ResWellData:
     def __init__(self):
         self.contents = ''  # solution name/chemical name
-        self.curr_conc = 0  # uM (micromol/L) # used for dilutions
-        self.goal_conc = 0  # uM (micromol/L) # used for dilutions
-        self.curr_vol = 0  # uL
-        self.goal_vol = 0  # uL
+        self.curr_conc = 0  # uM (micromol/L) # used for dilutions  (starting and achieved concentration)
+        self.goal_conc = 0  # uM (micromol/L) # used for dilutions  (goal concentration)
+        self.curr_vol = 0  # uL - starting volume and 'current' solution volume (tracked during solution processing)
+        self.goal_vol = 0  # uL - ending volume after dilutions, prior to sample use
+        self.dig_vol = 0  # uL - keeping track of volume during planning stage, while writing actions
         self.max_vol = 10000  # uL
         self.plate_slot_num = 0
         self.well_id_num = 0
         self.loc = (1, 0)  # (Slot_#, Well_#)
-        self.parent_sol_loc = (0, 0)
+        self.parent_loc = (0, 0)
         self.parent_conc = 0
-        self.parent_transf_vol = 0
+        self.par_transf_vol = 0
         self.dilution_complete = True
         self.assigned_tip = (11, 0)  # (Slot_#, Tip_#)
 
@@ -342,9 +359,11 @@ class SamWellData:
         self.targ_num_rinses = 3  # target num. of rinses after removing incub. liquid
         self.targ_num_reload = 0  # if incubation time is long, will remove and reload incubation liquid
         self.max_vol = 400  # volume of sample wells, in uL
+        self.dig_vol = 0
+        self.cur_vol = 0
         self.num_inoc_sol = 1  # number of inoculation solutions
         self.inoc_locs = ((5, 1),)  # solution locs and volume fractions
-        self.inoc_fracs = (1.0, )
+        self.inoc_fracs = (1.0,)
 
         # self.sam_indx = 0  # sample index from the original user_config_exp
 
@@ -370,8 +389,8 @@ class SamWellData:
         self.rinse_timestmps = []  # eg: [1208225, 1208325, ]  # rinse time collected @ time.perf_counter()
         self.incub_tot_time_s = 15  # integer, in seconds
         self.incub_mix_time_s = []  # eg: [100, 200, ]  # integer, in seconds
-        self.targ_act_seq = List[ActClass,]  # in seconds
-        self.pln_seq_stamps = List[ActClass,]  # in seconds
+        self.targ_act_seq = List[ActionInfo,]  # in seconds
+        self.pln_seq_stamps = List[ActionInfo,]  # in seconds
         # where each action is of Class ActClass(sample_index, action, timeline_in_seconds)
 
     # returns this when calling this object
@@ -386,39 +405,48 @@ class SamWellData:
         return this_string
 
 
-class ActClass:
-    def __init__(self, sam_id: int, action: str, stamp: int):
-        # initializing function, _attribute is a hidden attribute !
-        self._sam_id = sam_id  # integer of samples indexed 0 to num_sam
-        # in the order entered by user_config_exp
+class ActionInfo:
+    def __init__(self, keeper: (int, int), action: str, start_time_s: int,
+                 parent=(1, 0), targ=(1, 0), vol=0, tip=(11, 0),
+                 num_mixes=3, is_complex=True):
+        # par = from loc, targ = to loc, tip loc, and is_complex are optional parameters
+        # initializing function, _attribute is a hidden attribute!
+        self._transf_time_s = 20  # est. time, in seconds, for 'transfer' SIMPLE action
+        self._mix_time_s = 20  # est. time, in seconds, for 'mix' SIMPLE action
+        self._load_time_s = 40  # est. time, in seconds, for 'load' COMPLEX action
+        self._rinse_time_s = 60  # est. time (s) for 'reload' or 'rinse' or 'unload' COMPLEX actions
+        self._keeper = keeper  # (rack_num, well_id)  # action belongs to 'keeper'
+        # independent of from_loc and to_loc
         self._action = action  # complex action string
         # complex: ['load', 'reload', 'unload', 'rinse'] - multi step, multi-tips
         # simple:  [ 'mix', 'transf' ] - one step, one tip
-        self._start_stamp = stamp  # integer of start timestamp (seconds) for the desired action
+        self._simple = not is_complex  # set to True whe complex actions are expanded to simple ones
+        # complex actions can be swapped, but simple are expanded and cannot be swapped
+        self._start_stamp = start_time_s  # integer of start timestamp (seconds) for the desired action
         self._end_stamp = self._calc_end()  # calculated, estimated end timestamp
-        self._which_tip = (11, 0)  # change to (rack_slot,well_loc) terminology
         self._time_stamp = (self._start_stamp, self._end_stamp)  # timestamp
-        self._tip_loc = (11, 0)  # change to (rack_slot,well_loc) terminology
-        self._from_loc = (1, 0)  # change to (rack_slot,well_loc) terminology
-        self._to_loc = (2, 0)  # change to (rack_slot,well_loc) terminology
-        self._load_time_s = 40  # estimated time for 'load' action, in seconds
-        self._mix_time_s = 20  # estimated time for 'mix' action, in seconds
-        self._rinse_time_s = 60  # estimated time for 'rinse' or 'unload' action
+        self._tip_loc = tip  # tip_loc (rack_slot,well_loc) - for SIMPLE actions
+        self._from_loc = parent  # parent location, transfer 'from' (rack_slot,well_loc)
+        self._targ_loc = targ  # target location, transfer 'to' (rack_slot,well_loc)
+        self._transf_vol = vol  # uL target transfer amount from_loc to targ_loc
+        self._num_mixes = num_mixes  # number of mixes for each SIMPLE 'mix' action,
+        # or for the 'mix' in a COMPLEX action
+
 
     # returns this when calling this object
     def __repr__(self):
         this_string = "(" + str(self._time_stamp) + ", '" + \
-                      str(self.action) + "', " + str(self._from_loc) + \
-                      ", " + str(self._from_loc) + ", " + \
-                      str(self._tip_loc) + ")"
+                      str(self.action) + "', from:" + str(self._from_loc) + \
+                      ", to:" + str(self._targ_loc) + ", vol:" + str(self._transf_vol) + \
+                      ", tip: " + str(self._tip_loc) + ")"
         return this_string
 
     # returns this string when called via print(x)
     def __str__(self):
         this_string = "(" + str(self._time_stamp) + ", '" + \
-                      str(self.action) + "', " + str(self._from_loc) + \
-                      ", " + str(self._from_loc) + ", " + \
-                      str(self._tip_loc) + ")"
+                      str(self.action) + "', from:" + str(self._from_loc) + \
+                      ", to:" + str(self._targ_loc) + ", vol:" + str(self._transf_vol) + \
+                      ", tip: " + str(self._tip_loc) + ")"
         return this_string
 
     # setter methods
@@ -428,16 +456,21 @@ class ActClass:
         self._time_stamp = (self._start_stamp, self._end_stamp)
 
     def change_tip(self, set_tip: (int, int)):
-        self._which_tip = set_tip
+        self._tip_loc = set_tip
+
+    def set_targ(self, targ_loc: (int, int)):
+        self._targ_loc = targ_loc
+
+    def set_parent(self, par_loc: (int, int)):
+        self._from_loc = par_loc
+
+    def set_num_mixes(self, num_mixes: int):
+        self._num_mixes = num_mixes
 
     # property/ getter methods
     @property
-    def tip_id(self):
-        return self._which_tip
-
-    @property
-    def sam_id(self):
-        return self._sam_id
+    def keeper(self):
+        return self._keeper
 
     @property
     def action(self):
@@ -456,12 +489,16 @@ class ActClass:
         return self._time_stamp
 
     @property
+    def num_mixes(self):
+        return self._num_mixes
+
+    @property
     def par_loc(self):
         return self._from_loc
 
     @property
     def targ_loc(self):
-        return self._to_loc
+        return self._targ_loc
 
     @property
     def tip_loc(self):
@@ -475,19 +512,19 @@ class ActClass:
     # other functions
     def _calc_end(self):
         # MODIFY: check that global variables are defined.
-        if self.action == 'load':
-            prev_end_stamp = self._start_stamp + self._load_time_s
-        elif self.action == 'mix' or self.action == 'transf':
+        if self.action == 'mix':
             prev_end_stamp = self._start_stamp + self._mix_time_s
-        elif self.action == 'rinse' or self.action == 'unload' or self.action == 'reload':
-            prev_end_stamp = self._start_stamp + self._rinse_time_s
+        elif self.action == 'transf':
+            prev_end_stamp = self._start_stamp + self._transf_time_s
+        elif self.action == 'load':
+            prev_end_stamp = self._start_stamp + self._load_time_s
         else:
-            prev_end_stamp = self._start_stamp
+            prev_end_stamp = self._start_stamp + self._rinse_time_s
         return prev_end_stamp
 
 
 # define functions on these class objects
-def swap_actions(exp_sequence: List[ActClass], act_pos_this: int, act_pos_that: int):
+def swap_actions(exp_sequence: List[ActionInfo], act_pos_this: int, act_pos_that: int):
     # swap the two actions in the list  (^ this_action, old_action)
     # print("Swapping these actions: ", exp_sequence[pos2], exp_sequence[pos1])
     num_actions = len(exp_sequence)
@@ -501,13 +538,13 @@ def swap_actions(exp_sequence: List[ActClass], act_pos_this: int, act_pos_that: 
     return exp_sequence
 
 
-def check_order_swap(exp_sequence: List[ActClass], sam_indx: Tuple[int], this_pos: int, old_pos: int):
+def check_order_swap(exp_sequence: List[ActionInfo], sam_indx: Tuple[int], this_pos: int, old_pos: int):
     # if two actions are of the same type, check the order in the sam_indx
     old_action = exp_sequence[old_pos]
     this_action = exp_sequence[this_pos]
     # print("Checking if ", old_pos, ":", old_action, "should precede", this_pos, ":", this_action)  # debug
-    old_action_sam_indx = sam_indx.index(old_action.sam_id)
-    this_action_sam_indx = sam_indx.index(this_action.sam_id)
+    old_action_sam_indx = sam_indx.index(old_action.keeper)
+    this_action_sam_indx = sam_indx.index(this_action.keeper)
     # this means if two actions have the same index, they are probably in the correct order!
     if this_action_sam_indx < old_action_sam_indx:
         print(this_pos, ":", this_action, " should come before ", old_pos, ":", old_action, " Swapping them.")  # debug
@@ -515,7 +552,7 @@ def check_order_swap(exp_sequence: List[ActClass], sam_indx: Tuple[int], this_po
     return exp_sequence
 
 
-def swap_time_w_gap(exp_sequence: List[ActClass], be_first_pos: int, be_second_pos: int, gap_time: int):
+def swap_time_w_gap(exp_sequence: List[ActionInfo], be_first_pos: int, be_second_pos: int, gap_time: int):
     # maybe should be an inner function for shift_timestamp
     # print("Swapping timestamps for the actions in positions: ", be_first_pos, " and ", be_second_pos)  # debug
     # print("Before swap:", exp_sequence[be_first_pos], " and ", exp_sequence[be_second_pos])
@@ -526,7 +563,7 @@ def swap_time_w_gap(exp_sequence: List[ActClass], be_first_pos: int, be_second_p
     return exp_sequence
 
 
-def shift_all_for_load(exp_sequence: List[ActClass], this_sam_id: int, shift_time: int):
+def shift_all_for_load(exp_sequence: List[ActionInfo], this_sam_id: int, shift_time: int):
     # make a list of all load actions that come after sam_index 'load'
     # shift all actions for samples in that list by a time shift_time
     # then sorts and prioritizes the action list
@@ -536,18 +573,18 @@ def shift_all_for_load(exp_sequence: List[ActClass], this_sam_id: int, shift_tim
     for ix in range(len(exp_sequence)):
         # find all load actions that come after sam_index load
         this_action = exp_sequence[ix]
-        if this_action.sam_id == this_sam_id:
+        if this_action.keeper == this_sam_id:
             if this_action.action == 'load':
                 shift_for_load = True
         if shift_for_load and this_action.action == 'load':
-            sams_2_shift.append(this_action.sam_id)
+            sams_2_shift.append(this_action.keeper)
             # list of samples that are loaded after this_sam_id
 
     print("Shifting all actions for samples: ", sams_2_shift)  # debug
     for ix in range(len(exp_sequence)):
         # shift timestamp for all actions for samples in the list
         this_action = exp_sequence[ix]
-        if this_action.sam_id in sams_2_shift:
+        if this_action.keeper in sams_2_shift:
             this_action.change_start(this_action.start + shift_time)
 
     # sort and prioritize the list again
@@ -556,18 +593,18 @@ def shift_all_for_load(exp_sequence: List[ActClass], this_sam_id: int, shift_tim
     return exp_sequence
 
 
-def shift_all_for_rinse(exp_sequence: List[ActClass], act_pos, shift_time):
+def shift_all_for_rinse(exp_sequence: List[ActionInfo], act_pos, shift_time):
     print("Shifting all rinse after step")
-    this_indx = exp_sequence[act_pos].sam_id
+    this_indx = exp_sequence[act_pos].keeper
     print("Shifting all rinse for samples ", this_indx)
     for ix in range(act_pos, len(exp_sequence)):
         this_action = exp_sequence[ix]
-        if this_action.sam_id == this_indx and this_action.action == 'rinse':
+        if this_action.keeper == this_indx and this_action.action == 'rinse':
             this_action.change_start(this_action.start + shift_time)
     return exp_sequence
 
 
-def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
+def prioritize_sequence(in_seq: List[ActionInfo], sam_indx: Tuple[int]):
     # sort the list by timestamp, then iterate over the sorted list
     # if two timestamps overlap, rearrange the order in the following way:
     # prioritize in order (1) unload (2) mix (3) load (4) rinse
@@ -606,7 +643,7 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
             if this_action.action == old_action.action:
                 # print("Case: both are identical (0)")
                 exp_sequence = check_order_swap(exp_sequence, sam_indx, ix, (ix - 1))
-                if this_action.sam_id == exp_sequence[ix].sam_id and \
+                if this_action.keeper == exp_sequence[ix].keeper and \
                         this_action.start == exp_sequence[ix].start:
                     # print("no change in exp_sequence")  # debug
                     # print("Actions are in the correct order.")  # debug
@@ -700,7 +737,7 @@ def prioritize_sequence(in_seq: List[ActClass], sam_indx: Tuple[int]):
     return exp_sequence
 
 
-def find_when_action(action: str, exp_sequence: List[ActClass], act_pos: int):
+def find_when_action(action: str, exp_sequence: List[ActionInfo], act_pos: int):
     # find the index of the action 'action' that has the same
     # sample id as the action in act_pos
 
@@ -712,19 +749,19 @@ def find_when_action(action: str, exp_sequence: List[ActClass], act_pos: int):
 
     find_action = exp_sequence[act_pos]
     # print("This action is:", find_action) # debug
-    find_action_id = find_action.sam_id  # sample id of action # MODIFY: use sam Location instead?
+    find_action_id = find_action.keeper  # sample id of action # MODIFY: use sam Location instead?
     when_action = 0
     for ix in range(len(exp_sequence)):
         this_action = exp_sequence[ix]  # should be an alias, not a copy
         # MODIFY: use sam Location instead?
-        if this_action.action == action and this_action.sam_id == find_action_id:
+        if this_action.action == action and this_action.keeper == find_action_id:
             when_action = ix
             break  # action index found, break out of for loop
     # print("This action is correlated with:", exp_sequence[when_action])  # debug
     return when_action
 
 
-def find_gap_array(exp_seq: List[ActClass], act_pos: int):
+def find_gap_array(exp_seq: List[ActionInfo], act_pos: int):
     # returns a list of gaps, in seconds, between the actions
     # in exp_sequence up to act_pos, including zeros
 
@@ -748,7 +785,7 @@ def find_gap_array(exp_seq: List[ActClass], act_pos: int):
     return gap_list  # list of gaps, in seconds, between actions up to (act_pos - 1)
 
 
-def find_next_gap(exp_sequence: List[ActClass], from_pos: int, to_pos: int):
+def find_next_gap(exp_sequence: List[ActionInfo], from_pos: int, to_pos: int):
     # returns the index of the next available gap for action of interest @ to_pos
     # from the gap AFTER the load/unload action step (from_pos)
 
@@ -771,7 +808,7 @@ def find_next_gap(exp_sequence: List[ActClass], from_pos: int, to_pos: int):
     return which_gap  # returns index of first gap where action @ to_pos can fit, but after action @ from_pos
 
 
-def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
+def shift_timestamp(in_seq: List[ActionInfo], sam_indx: Tuple[int]):
     # next, iterate over the sorted list and shift all except unload
     # shift the action if the previous one has a timestamp that
     # overlaps with the time needed to complete the previous action
@@ -829,7 +866,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
                 # Case: unload (1) + old: unload (1)
                 if old_action.action == 'unload':
                     print("Two unloads overlap! Check order:", sam_indx)  # debug
-                    sam_id = this_action.sam_id  # moving this_action
+                    sam_id = this_action.keeper  # moving this_action
                     shift_time = old_action.end - this_action.start
                     # print("Load needs to shift for all loads/steps after sam_id: ",
                     #      sam_id, " by time: ", shift_time)  # debug
@@ -866,7 +903,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
                     ix = 1
                 # Case: load (3) + (unload (1) or mix(2) or load(3))
                 else:
-                    sam_id = this_action.sam_id
+                    sam_id = this_action.keeper
                     shift_time = old_action.end - this_action.start
                     # target load time should start at prev_end_stamp, so shift 'load' by the difference
                     # print("Load needs to shift for all loads/steps after sam_id: ",
@@ -891,7 +928,7 @@ def shift_timestamp(in_seq: List[ActClass], sam_indx: Tuple[int]):
     return exp_sequence
 
 
-def find_gaps_compress_actions(in_seq: List[ActClass]):
+def find_gaps_compress_actions(in_seq: List[ActionInfo]):
     # Find the gaps in exp_sequence and compress when there are gaps
     # moving all 'rinse' steps forward if they fit into gaps (no swapping)
     exp_sequence = deepcopy(in_seq)
@@ -908,7 +945,7 @@ def find_gaps_compress_actions(in_seq: List[ActClass]):
     return exp_sequence
 
 
-def swap_into_gaps(in_seq: List[ActClass], sam_indx: Tuple[int]):
+def swap_into_gaps(in_seq: List[ActionInfo], sam_indx: Tuple[int]):
     # Check the gaps between two actions and see if
     # 'rinse' actions can be swapped into the gap
     exp_sequence = deepcopy(in_seq)  # not alias, deep copy
@@ -970,8 +1007,8 @@ def create_exp_sequence(exp: ExperimentData):
 
     # first, concatenate action steps and add load time
     # noinspection PyTypeChecker
-    exp_sequence: List[ActClass] = []
-    this_action: ActClass
+    exp_sequence: List[ActionInfo] = []
+    this_action: ActionInfo
     time_in_seq = start_time
     for ij in range(num_samples):
         sample_index = sam_indx_in_order[ij]
@@ -1057,6 +1094,7 @@ def reverse_the_list(t):
         return (t[-1],) + reverse_the_list(t[:-1])
 
 
+# move to exp class?
 def find_list_rack_data(rack_list: list[RackData], slot_num: int):
     list_length = len(rack_list)
     for indx in range(list_length):
@@ -1064,6 +1102,32 @@ def find_list_rack_data(rack_list: list[RackData], slot_num: int):
         if rack.slot == slot_num:
             return indx
     s_out = "Slot # " + str(slot_num) + " is not in this list of reservoirs!"
+    raise ValueError(s_out)
+
+
+# move to exp class?
+def find_res_in_list(res_list: list[ResWellData], loc: (int, int)):
+    list_length = len(res_list)
+    for res_indx in range(list_length):
+        res = res_list[res_indx]
+        if res.loc == loc:
+            return res_indx
+    s_out = "Loc " + str(loc) + " is not in this list of reservoirs!"
+    raise ValueError(s_out)
+
+
+# move to exp class?
+def find_res_in_nest_list(res_list: list[list[ResWellData]], loc: (int, int)):
+    main_list_length = len(res_list)
+    for rack_indx in range(main_list_length):
+        sub_list = res_list[rack_indx]
+        sub_list_length = len(sub_list)
+        for res_indx in range(sub_list_length):
+            res = sub_list[res_indx]
+            if res.loc == loc:
+                indices = (rack_indx, res_indx)
+                return indices
+    s_out = "Loc " + str(loc) + " is not in this nested list of reservoirs!"
     raise ValueError(s_out)
 
 
@@ -1300,8 +1364,8 @@ def calc_nums_exp(exp: ExperimentData):
         rack.well_ids = tuple(rack.well_ids)  # convert list of well_ids in RackData object
 
     # select starting wells
-    exp.this_loc_waste = exp.waste_res_loc[0]
-    exp.this_loc_rinse = exp.rinse_res_loc[0]
+    exp.cur_waste = exp.waste_res_loc[0]
+    exp.cur_rinse = exp.rinse_res_loc[0]
 
     # print summary:
     # print info about reservoirs
@@ -1345,7 +1409,7 @@ def set_up_res_sam_data(exp: ExperimentData):
     res_racks = deepcopy(exp.res_plate_wells)
     res_data_set = []  # list of ResWellData objects (nested by rack), includes waste and rinse
     for rack in res_racks:
-        #print(rack)  # debug
+        # print(rack)  # debug
         slot_num = rack.slot
         num_wells = rack.num_wells
         wells_ids = rack.well_ids
@@ -1366,6 +1430,7 @@ def set_up_res_sam_data(exp: ExperimentData):
             new_res.loc = res_loc
             new_res.max_vol = max_vol
             new_res.curr_vol = starting[0]
+            new_res.dig_vol = new_res.curr_vol
             new_res.curr_conc = starting[1]
             new_res.goal_vol = ending[0]
             new_res.goal_conc = ending[1]
@@ -1388,6 +1453,10 @@ def set_up_res_sam_data(exp: ExperimentData):
         num_wells = rack.num_wells
         wells_ids = rack.well_ids
         max_vol = rack.max_vol
+        if exp.start_dry:
+            start_vol = 0
+        else:
+            start_vol = max_vol
         rack_set = []
         for well_indx in range(num_wells):
             well_id = wells_ids[well_indx]
@@ -1407,6 +1476,7 @@ def set_up_res_sam_data(exp: ExperimentData):
             new_sam.targ_num_mixes = incub_info[1]
             new_sam.targ_num_rinses = incub_info[2]
             new_sam.max_vol = max_vol
+            new_sam.dig_vol = start_vol
             num_inoc_res = res_locs[0]  # number of inoculation solutions
             new_sam.num_inoc_sol = num_inoc_res
             inoc_locs = []
@@ -1447,12 +1517,15 @@ def plan_dil_series(exp: ExperimentData):
         return exp
 
     def find_par_calc_tranf(dil_subset: list[ResWellData]):
+        #
         dil_subset.sort(key=lambda x: x.goal_conc, reverse=False)  # sort subset by goal_conc
-        # sorted from lowest goal concentration to highest
+        # sorted from the lowest goal concentration to the highest (reverse = False)
         # res_set_per_content.append(res_subset)
         content_type = dil_subset[0].contents
         num_subset = len(res_subset)
-
+        print("--------------------------------------------------------------------------------")  # debug
+        print("Identifying parent for each dilution child w content: ", content_type)  # debug
+        print("id, loc,   cur_vol,  goal_vol,  goal_conc, curr_conc")  # debug
         for res_id in range(num_subset):
             child_res = res_subset[res_id]
             print(res_id, child_res.loc, "  ", child_res.curr_vol, "  ", child_res.goal_vol,
@@ -1460,13 +1533,12 @@ def plan_dil_series(exp: ExperimentData):
             if child_res.contents != content_type:
                 s_out = "Reservoir subset sent to find_par_calc_tranf is not all of content type: " + str(content_type)
                 raise ValueError(s_out)
-        # TODO: START HERE ON 4/11/2023
 
         for res_id in range(num_subset):
             # for each in range(num_subset - 1):
             child_res = res_subset[res_id]
-            print("________________________________________________________")
-            print("Evaluating", child_res.loc, " with goal concentration: ",
+            print("____________________________________________________________________________")  # debug
+            print("Evaluating", res_id, child_res.loc, "w goal concentration: ",
                   child_res.goal_conc, "uM and volume: ", child_res.goal_vol, "uL")  # debug
             if not child_res.dilution_complete:
                 parent_id = res_id  # for first iteration, same as child
@@ -1477,131 +1549,137 @@ def plan_dil_series(exp: ExperimentData):
                 loop_num = 0  # fail-safe to prevent infinite loop
                 while tran_mod > 0:
                     loop_num += 1  # fail-safe to prevent infinite loop
-                    # recall res_subset sorted from lowest goal concentration to highest
+                    # recall res_subset sorted from the lowest goal concentration to highest
                     parent_id += 1  # selecting next as parent
-                    print("pipette cannot transfer: ", tran_mod, "uL")  # debug
-                    print("checking parent id", parent_id)  # debug
+                    if loop_num > 1:
+                        print("Pipette cannot transfer: ", tran_mod, "uL")  # debug
                     if parent_id >= num_subset or loop_num > 10:
                         print("WARNING: Alternative dilution parent not available for reservoir in loc ", child_res.loc)
                         break
                     parent_res = res_subset[parent_id]
-                    print("Choosing parent for dilution ", parent_res.loc,
+                    print("Choosing parent for dilution ", parent_id, parent_res.loc,
                           " with concentration ", parent_res.goal_conc, " uM")
                     # ratio of child to parent concentration
                     conc_ratio_chi_par = child_res.goal_conc / parent_res.goal_conc
                     transf_vol = int(conc_ratio_chi_par * child_res.goal_vol)
-                    # print("Transferring: ", transf_vol)  # debug
                     tran_mod = int(transf_vol % 100)  # need to round to 100 uL
+                    # print("Transferring: ", transf_vol)  # debug
                     if tran_mod > 0 and loop_num < 3:
-                        # and tran_mod % 10 == 0
-                        # increase transfer volume to use large pipette
-                        transf_vol = int(transf_vol + 100 - tran_mod)
+                        transf_vol = int(transf_vol - tran_mod + 100)
                         new_goal_vol = int(transf_vol / conc_ratio_chi_par)
+                        # and tran_mod % 10 == 0
+                        # increase transfer volume,  mod to be divisible to 100
                         # print("Changing transf_vol to ", transf_vol,
                         #       ", with goal volume ", new_goal_vol) # debug
                         if new_goal_vol % 100 == 0:
-                            child_res.goal_vol = new_goal_vol
+                            child_res.goal_vol = new_goal_vol  # change goal vol
+                            parent_id -= 1  # keep the same parent and try again
+                            # if new goal is divisible by 100uL
                             # print("Changing", this_res.loc,
                             #       " with concentration: ", this_res.goal_conc,
                             #       " uM to goal volume ", this_res.goal_vol, "uL")  # debug
-                            parent_id -= 1  # keep the same parent and try again
                         # else:
                         #     print("Volume incompatible with pipette")
                     elif tran_mod > 0 and loop_num >= 3:
-                        child_res.goal_vol = orig_vol
+                        child_res.goal_vol = orig_vol  # returning to original volume if tried increasing thrice
                         # print("Changing", this_res.loc, " with concentration: ",
                         #       this_res.goal_conc, " uM BACK to goal volume ", this_res.goal_vol, "uL")  # debug
                 if parent_id < (num_subset - 1):
+                    # if parent id exists, increase parent's goal_volume by transfer amount
                     parent_res.goal_vol = parent_res.goal_vol + transf_vol
-                    print("Changing parent", parent_res.loc, " volume to ", parent_res.goal_vol)  # debug
                     if parent_res.goal_vol > parent_res.max_vol:
                         parent_res.goal_vol = parent_res.max_vol
+                        print("WARNING: adjusting parent volume to max for loc ", parent_res.loc)
+                    print("Changing parent", parent_res.loc, " volume to ", parent_res.goal_vol)  # debug
                 child_res.parent_conc = parent_res.goal_conc
-                child_res.parent_sol_loc = parent_res.loc
-                child_res.parent_transf_vol = transf_vol
+                child_res.parent_loc = parent_res.loc
+                child_res.par_transf_vol = transf_vol
         res_subset.sort(key=lambda x: x.goal_conc, reverse=True)  # sort subset by goal_conc
+        # sorted from the highest goal concentration to the lowest (reverse = True)
+        print("____________________________________________________________________________")  # debug
+        print("Updated subset of content type: ", content_type)  # debug
+        print("id, loc, goal_conc, goal_vol, parent, p_conc, tf_vol")  # debug
+        for res_id in range(num_subset):
+            child_res = res_subset[res_id]
+            print(res_id, child_res.loc, "  ", child_res.goal_conc, "  ", child_res.goal_vol,
+                  "  ", child_res.parent_loc, "  ", child_res.parent_conc, "  ", child_res.par_transf_vol)  # debug
+        print("--------------------------------------------------------------------------------")  # debug
         return dil_subset
 
-    #res_data = exp.all_res_data  # alias
-    res_data = deepcopy(exp.all_res_data)  # not alias
-    sam_timestamp = 0
+    # res_data = exp.all_res_data  # alias
+    res_data = deepcopy(exp.all_res_data)  # not alias - needs to be copied back
+    num_types = exp.num_cont_types
 
     res_set_per_content = []
-    for this_type in exp.content_types:
-        print(this_type)  # debug
+    for type_indx in range(num_types):
+        this_type = exp.content_types[type_indx]
+        print("Content type: ", this_type)  # debug
         res_subset = []  # empty sublist of one content type
-        for res_rack in res_data:
-            for res in res_rack:
+        for res_set_rack in res_data:
+            for res in res_set_rack:
                 check_contents = res.contents
                 if check_contents == this_type:
                     res_subset.append(res)
                     # print(check_contents, res.loc, res.dilution_complete)  # debug
-    # TODO: START HERE ON 4/11/2023
-        res_subset = find_par_calc_tranf(res_subset)
-        # res_set_per_content.append(res_subset)
+        res_subset = find_par_calc_tranf(res_subset)  # finds dilution parents, transf_vol
+        # returns sublist with goal-concentration in reverse order (highest to lowest)
+        res_set_per_content.append(res_subset)
+
+    sam_timestamp = 0
+    zero_mixes = 0
+    num_times_mixed = 10
+    action_set = []
+    for type_indx in range(num_types):
+        this_type = exp.content_types[type_indx]
+        res_subset = res_set_per_content[type_indx]
+        print("Content type: ", this_type)  # debug
+        for res in res_subset:
+            # recall list with goal-concentration (highest to lowest) order
+            if not res.dilution_complete:
+                # create actions for this reservoir:
+                # (1) transf concentrated solution from parent to child
+                # (2) transf DI dilution solution from parent to child
+                # (3) mix solution in current reservoir
+                print("Creating actions for: ", res.loc)  # debug
+                sol_parent = res.parent_loc  # select concentrated parent
+                par_indx = find_res_in_list(res_subset, sol_parent)  # index from subset list
+                par_res = res_subset[par_indx]  # select reservoir
+                par_tip = par_res.assigned_tip  # use tip of the 'from' reservoir
+                sol_vol = res.par_transf_vol  # transfer volume from concentrated parent
+                new_action = ActionInfo(res.loc, 'transf', sam_timestamp,
+                                        sol_parent, res.loc, sol_vol, par_tip, zero_mixes)
+                par_res.dig_vol = par_res.dig_vol - sol_vol  # update parent res volume
+                res.dig_vol = res.dig_vol + sol_vol  # update current res volume
+                sam_timestamp = new_action.end  # update the next start time
+                action_set.append(new_action)  # add to list of actions
+                print(new_action)  # debug
+                dil_vol = res.goal_vol - sol_vol  # calculate dilution volume
+                dil_loc = exp.cur_rinse  # location of dilution parent
+                dil_indx = find_res_in_nest_list(res_data, dil_loc)  # find indices for disputant
+                dil_res = res_data[dil_indx[0]][dil_indx[1]]  # select disputant reservoir
+                dil_tip = dil_res.assigned_tip  # tip of the dilution reservoir
+                new_action = ActionInfo(res.loc, 'transf', sam_timestamp,
+                                        dil_loc, res.loc, dil_vol, dil_tip, zero_mixes)
+                res.dig_vol = res.dig_vol + dil_vol  # update current res volume
+                dil_res.dig_vol = dil_res.dig_vol - dil_vol  # update disputant res volume
+                if dil_res.dig_vol < 100:
+                    # if dilution volume is too low, select next
+                    exp.cur_rinse = exp.find_next_rinse(dil_loc)  # update dilution location
+                sam_timestamp = new_action.end  # update the next start time
+                action_set.append(new_action)  # add to list of actions
+                print(new_action)  # debug
+                mix_vol = min(1000, int(0.5 * res.goal_vol))  # choose smaller volume
+                res_tip = res.assigned_tip  # tip of the child reservoir
+                new_action = ActionInfo(res.loc, 'mix', sam_timestamp,
+                                        res.loc, res.loc, mix_vol, res_tip, num_times_mixed)
+                sam_timestamp = new_action.end  # update the next start time
+                action_set.append(new_action)  # add to list of actions
+                print(new_action)  # debug
+
+    exp.all_res_data = res_data  # copy res_data back to exp
+    exp.pln_dilut_seq = action_set  # copy dilution action set
 
 
-        for each in range(num_subset - 1):
-            this_res = res_subset[each]
-            print("________________________________________________________")
-            print("Evaluating", this_res.loc, " with concentration: ",
-                  this_res.goal_conc, " uM and volume ", this_res.goal_vol, "uL")  # debug
-            if not this_res.dilution_complete:
-                parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
-                transf_vol = this_res.parent_transf_vol
-                dilut_vol = this_res.goal_vol - transf_vol
-
-        # START HERE!!!!!
-
-        for each_res in range(len(rev_dil_order)):
-            res_ind = rev_dil_order[each_res]  # indices for the SUBSET
-            some_res = which_res[res_ind]  # index for the original list, exp.res_contents
-            its_loc = which_locs[res_ind]  # location from the original list
-            its_goal_con = goal_conc[res_ind]
-            its_start_con = start_conc[res_ind]
-            if DO_DEBUG:
-                print("some_res is ", some_res, " with loc: ", its_loc)  # debug
-                print("goal: ", its_goal_con, " started with: ", its_start_con)  # debug
-            if its_start_con < its_goal_con and each_res > 0:
-                its_goal_vol = goal_vols[res_ind]
-                prev_ind = rev_dil_order[each_res - 1]
-                prev_conc = goal_conc[prev_ind]
-                prev_loc = which_locs[prev_ind]
-                transf_vol = round((its_goal_con / prev_conc * its_goal_vol), 2)
-                add_water = round((its_goal_vol - transf_vol), 2)
-                tran_mod = round((transf_vol % 100), 2)  # need to round to 100 uL
-                if tran_mod > 0:
-                    print("use a diff dilution parent, pipette cannot transfer: ", tran_mod)  # debug
-                    if each_res < 2:
-                        print("Cannot transfer from different dilution parent.")  # debug
-                    else:
-                        prev_ind = rev_dil_order[each_res - 2]
-                        prev_conc = goal_conc[prev_ind]
-                        prev_loc = which_locs[prev_ind]
-                        transf_vol = round((its_goal_con / prev_conc * its_goal_vol), 2)  # need to round to 100 uL
-                        add_water = round((its_goal_vol - transf_vol), 2)
-                        tran_mod = round((transf_vol % 100), 2)
-                        if tran_mod > 0:
-                            print("use a diff dilution parent, pipette cannot transfer: ", tran_mod)  # debug
-                print("Do a dilution for ", its_loc, ", transfer: ", transf_vol, "uL from ", prev_loc,
-                      " and dilute with ", add_water, "uL water")  # debug
-                for each in exp.res_data:
-                    if each.loc == its_loc:
-                        each.parent_sol_loc = prev_loc
-                        each.parent_conc = prev_conc
-                    if each.loc == prev_loc:
-                        each.goal_vol = each.goal_vol + transf_vol
-                # print("Select ResWell from exp.res_data")
-                # find which of res_ids value equals some_res,
-                for each_data in range(len(exp.res_data)):
-                    this_data = exp.res_data[each_data]
-                    print("each_data: ", each_data, "ResWell location: ", this_data.loc)  # debug
-                print("Add actions: transfer, dilute, mix.")  # debug
-                this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
-                this_action.change_tip(sample.assigned_tip)  # load tip
-            # START HERE: keep track of the order (when tracking subsets)
-        exp.res_dil_order = res_dil_order
-    print(exp.num_cont_types)
     return exp
 
 
@@ -1618,7 +1696,7 @@ def config_samples(exp: ExperimentData):
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # third, plan dilution series
 
-    this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
+    this_action = ActionInfo(this_sam_indx, 'mix', sam_timestamp)
     this_action.change_tip(sample.assigned_tip)  # load tip
 
     # second, find the order of SAMPLE incubation:
@@ -1697,26 +1775,26 @@ def config_samples(exp: ExperimentData):
             # sample.targ_incub_gap_time_m = exp.sample_targ_incub_gap_times_min[start_sam]
             sample.loc = (sample.plate_indx, sample.well_id)
             targ_inc_time_s = math.ceil(60 * sample.targ_incub_time_m)
-            exp_sequence: List[ActClass] = []
+            exp_sequence: List[ActionInfo] = []
             sam_timestamp = 0
-            this_action = ActClass(this_sam_indx, 'load', sam_timestamp)
+            this_action = ActionInfo(this_sam_indx, 'load', sam_timestamp)
             this_action.change_tip(sample.assigned_tip)  # load tip
             # current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
             exp_sequence.append(this_action)
             gap_time = math.ceil(targ_inc_time_s / (sample.targ_num_mixes + 1))
             for i in range(sample.targ_num_mixes):
                 sam_timestamp = sam_timestamp + gap_time
-                this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
+                this_action = ActionInfo(this_sam_indx, 'mix', sam_timestamp)
                 this_action.change_tip(sample.assigned_tip)  # load tip
                 exp_sequence.append(this_action)
             # the timestamps for 'reload' will be resorted at the end
             for i in range(sample.targ_num_reload):
                 gap_time = (i + 1) * max_time_before_evap_m * 60
-                this_action = ActClass(this_sam_indx, 'reload', gap_time)
+                this_action = ActionInfo(this_sam_indx, 'reload', gap_time)
                 this_action.change_tip(sample.assigned_tip)  # load tip
                 exp_sequence.append(this_action)
             sam_timestamp = targ_inc_time_s
-            this_action = ActClass(this_sam_indx, 'unload', sam_timestamp)
+            this_action = ActionInfo(this_sam_indx, 'unload', sam_timestamp)
             # sample.which_tip_loc = exp.find_next_tip(sample.which_tip_loc)  # find next tip loc
             add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks instead?
             tip_ids.append(add_tip)  # new tip to unload
@@ -1726,7 +1804,7 @@ def config_samples(exp: ExperimentData):
             tip_ids.append(add_tip)  # new tip to rinse, every rinse
             sam_timestamp = sam_timestamp + 3 * rinse_time_s + 60 * max_incub
             for i in range(sample.targ_num_rinses):
-                this_action = ActClass(this_sam_indx, 'rinse', sam_timestamp)
+                this_action = ActionInfo(this_sam_indx, 'rinse', sam_timestamp)
                 this_action.change_tip(add_tip)
                 exp_sequence.append(this_action)
                 sam_timestamp = sam_timestamp + 3 * rinse_time_s
@@ -1817,6 +1895,10 @@ def user_config_exp():
     # List the locations of waste reservoir wells and rinse/dilution reservoir wells:
     my_exp.waste_res_loc = ((1, 2), (4, 2),)  # location(s) (slot_num, well_indx) for 'Waste'
     my_exp.rinse_res_loc = ((1, 0), (4, 0),)  # location(s) (slot_num, well_indx) for 'DI_sol'
+    # Start with samples wet (max_vol) or dry - w/o liquid
+    my_exp.start_dry = False
+    # Store samples wet (max_vol DI rinse) or dry - w/o liquid
+    my_exp.store_dry = False
 
     # Fourth, for each reservoir well, indicate the following:
     # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
@@ -2026,12 +2108,12 @@ def run(protocol: protocol_api.ProtocolContext):
 
     def check_rinse_empty(well_data):
         ## MODIFY: use subset of res_data?
-        well_data = exp.rinse_data[exp.this_loc_rinse]
+        well_data = exp.rinse_data[exp.cur_rinse]
         if well_data.curr_vol < 1000:
             print("This rinse reservoir is empty. Switching to next.")
-            exp.this_loc_rinse = exp.this_loc_rinse + 1  # increment to next rinse index
+            exp.cur_rinse = exp.cur_rinse + 1  # increment to next rinse index
             # DOES THIS MODIFY THE GLOBAL VARIABLE?
-            if exp.this_loc_rinse >= exp.max_num_rinse:
+            if exp.cur_rinse >= exp.max_num_rinse:
                 print("We have run out of rinse solution!")
                 print("Human input needed!")
                 raise StopExecution
@@ -2042,9 +2124,9 @@ def run(protocol: protocol_api.ProtocolContext):
     def check_waste_full(well_data):
         if (well_data.curr_vol + 1000) > well_data.max_vol:
             print("This waste reservoir is full. Switching to next.")
-            exp.this_loc_waste = exp.this_loc_waste + 1  # increment to next rinse index
+            exp.cur_waste = exp.cur_waste + 1  # increment to next rinse index
             # DOES THIS MODIFY THE GLOBAL VARIABLE?
-            if exp.this_loc_waste >= exp.max_num_waste:
+            if exp.cur_waste >= exp.max_num_waste:
                 print("No space left for waste collection!")
                 print("Human input needed!")
                 raise StopExecution
@@ -2190,21 +2272,21 @@ def run(protocol: protocol_api.ProtocolContext):
             # print("___________________________________________")
             # print("ix is now:", ix)  # debug
             this_action = exp_sequence[ix]
-            sample_id = this_action.sam_id
+            sample_id = this_action.keeper
 
             sam_plate_id = exp.sam_plate_indx_nums[sample_id]
             sam_well_id = exp.sam_well_indx_nums[sample_id]
             sam_data = all_samples[sam_plate_id][sam_well_id]  # choose sample data_set (alias)
             this_well = sample_plates[sam_plate_id].wells()[sam_well_id]  # Labware well object for protocol use
-            if which_tip != this_action.tip_id:
-                which_tip = this_action.tip_id
+            if which_tip != this_action.get_tip:
+                which_tip = this_action.get_tip
                 swap_tips(which_tip, which_pip)
 
             ## MODIFY: use subset of res_data?
-            waste_data = exp.waste_data[exp.this_loc_waste]  # choose waste data_set (alias)
-            rinse_data = exp.rinse_data[exp.this_loc_rinse]  # choose rinse data_set (alias)
-            this_rinse = rinse_res_arr[exp.this_loc_rinse]  # Labware well object for protocol use
-            this_waste = waste_res_arr[exp.this_loc_waste]  # Labware well object for protocol use
+            waste_data = exp.waste_data[exp.cur_waste]  # choose waste data_set (alias)
+            rinse_data = exp.rinse_data[exp.cur_rinse]  # choose rinse data_set (alias)
+            this_rinse = rinse_res_arr[exp.cur_rinse]  # Labware well object for protocol use
+            this_waste = waste_res_arr[exp.cur_waste]  # Labware well object for protocol use
 
             goal_time = this_action.start - 10  # start action within 10 seconds of start/end time
             action_type = this_action.action
