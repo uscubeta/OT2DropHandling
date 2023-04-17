@@ -145,6 +145,8 @@ class ExperimentData:
         # num_mixes: num of times incubating solution is mixed during incubation
         # num_rinses: num of times solution is rinsed after incubation
         self.sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol'),), (20, 3, 4), 'USCYYAuMMDDa'),)
+        self.incub_loc_order = ((1, 0),)  # inoculated sam order, by loc, longest incubation first
+        self.max_incub_m = 1  # maximum incubation time for all samples
 
         # currently, using these wells as:
         self.cur_waste = (1, 2)
@@ -153,6 +155,7 @@ class ExperimentData:
         self.do_dilutions = False
         self.start_dry = True
         self.store_dry = False
+        self.incub_longest_first = True
         self.content_types = ['type1', ]  # excludes waste/rinse
         self.num_cont_types = 0  # number of self.content_types
         self.rev_dil_order = []
@@ -431,7 +434,6 @@ class ActionInfo:
         self._transf_vol = vol  # uL target transfer amount from_loc to targ_loc
         self._num_mixes = num_mixes  # number of mixes for each SIMPLE 'mix' action,
         # or for the 'mix' in a COMPLEX action
-
 
     # returns this when calling this object
     def __repr__(self):
@@ -1065,8 +1067,8 @@ def create_exp_sequence(exp: ExperimentData):
 
 
 # used in config_samples
-def give_list_order(some_list: Tuple[int]):
-    # sort a tuple list (indexed 0 to len(some_list))
+def give_incubation_order(incub_list: list[int, (int, int)]):
+    # sort a list of incubation values linked to sam_loc
     # by the VALUES in the list, then return
     # the index values of the sorted list
     # eg: (5, 3, 2, 0, ...)
@@ -1094,7 +1096,7 @@ def reverse_the_list(t):
         return (t[-1],) + reverse_the_list(t[:-1])
 
 
-# move to exp class?
+# keep external to classes
 def find_list_rack_data(rack_list: list[RackData], slot_num: int):
     list_length = len(rack_list)
     for indx in range(list_length):
@@ -1105,7 +1107,7 @@ def find_list_rack_data(rack_list: list[RackData], slot_num: int):
     raise ValueError(s_out)
 
 
-# move to exp class?
+# keep external to classes
 def find_res_in_list(res_list: list[ResWellData], loc: (int, int)):
     list_length = len(res_list)
     for res_indx in range(list_length):
@@ -1116,7 +1118,7 @@ def find_res_in_list(res_list: list[ResWellData], loc: (int, int)):
     raise ValueError(s_out)
 
 
-# move to exp class?
+# keep external to classes
 def find_res_in_nest_list(res_list: list[list[ResWellData]], loc: (int, int)):
     main_list_length = len(res_list)
     for rack_indx in range(main_list_length):
@@ -1141,11 +1143,21 @@ def find_res_in_nest_list(res_list: list[list[ResWellData]], loc: (int, int)):
 #     s_out = "Location # " + str(find_loc) + " is not in nested list of reservoirs."
 #     raise ValueError(s_out)
 
-
+# Run first, after user_config_exp()
 def calc_nums_exp(exp: ExperimentData):
-    # derive totals from user_config_exp
+    # Simplifies the data users are required to enter for each experiment.
+    # Function derives totals from user_config_exp(). Checks that info entered correctly.
+    # Calculates total number of important variables. Populates list of available pipette tips.
+    # Collect info on res/sam racks into lists of RackData objects: res_plate_wells & sam_plate_wells
+    # Then updates that data from info entered in user_config_exp():
+    # (res) location, contents, starting/ending concentration/volume.
+    # (sam) location, inoculation number,
+    # inoculation locations (checked in function), & fractions (checks sum).
+    # Identifies locations of solution wells and lists content types.
+    # Determines if dilutions are needed. Prints info for user (debugging).
+
     print("===========================================================================================")  # debug
-    # Todo: Print info about slots in deck order: text picture?
+    # ToDo: Print info about slots in deck order: text picture?
 
     # calculate number of racks and plates
     exp.num_lg_tipracks = len(exp.slots_tiprack_lg)
@@ -1153,17 +1165,20 @@ def calc_nums_exp(exp: ExperimentData):
     exp.num_res_plates = len(exp.slots_res_racks)
     exp.num_sam_plates = len(exp.slots_sam_plates)
 
+    # check that all slots are legal to the OT2Deck (1-11) and are not duplicated
     all_slots = list(exp.slots_res_racks) + list(exp.slots_sam_plates) + \
                 list(exp.slots_tiprack_lg) + list(exp.slots_tiprack_sm)
-
     all_slots.sort()  # sort in ascending order
     for each in all_slots:
         if each < 1 or each > 11:
-            s_out = "WARNING: Listed slot: " + str(each) + " is out of range! Check user_config_exp and retry."
+            # OT-2 Deck only supports slots 1-11
+            s_out = "WARNING: Listed slot: " + str(each) \
+                    + " is out of range! Check user_config_exp() and retry."
             print(s_out)
             raise StopExecution
         num_times = all_slots.count(each)
         if num_times > 1:
+            # Slots can only be used once
             s_out = "WARNING: Listed slot: " + str(each) + " used more than once! Check user_config_exp and retry."
             print(s_out)
             raise StopExecution
@@ -1180,52 +1195,41 @@ def calc_nums_exp(exp: ExperimentData):
         print(s_out)
         raise StopExecution
 
-    def find_slot_in_nestedlist_4rack(res_list, slot_num: int):
+    def find_slot_in_nestedlist_4rack(res_list, slot_number: int):
         # returns index of item for an item in a list such that:
-        # res_list = ((some_num, some_val,...),(some_num, some_val,...),...)
-        # where slot_num matches some_val in the sublist:
+        # res_list = ((slot_num1, some_val1,...),(slot_num2, some_val2,...),...)
+        # where slot_num matches some_val in each sublist:
         for sub_list_indx in range(len(res_list)):
-            sub_list = res_list[sub_list_indx]
-            if slot_num == sub_list[0]:
-                return sub_list_indx
-        error_out = "Slot # " + str(slot_num) + " is not in the nested list."
-        raise ValueError(error_out)
+            sub_list = res_list[sub_list_indx]  # select sub_list
+            if slot_number == sub_list[0]:  # if slot_num matches slot_number
+                return sub_list_indx  # return index
+        error_out = "Slot # " + str(slot_number) + " is not in the nested list."
+        raise ValueError(error_out)  # if not found, return error
 
-    # collect data on res/sam racks into lists of RackData objects
-    # make a list of RackData items for each res rack
-    temp_list = []
-    for slot_num in exp.slots_res_racks:
-        new_item = RackData(slot_num, 'res')
-        indx = find_slot_in_nestedlist_4rack(exp.offsets_res_racks, slot_num)
-        off_wrack = exp.offsets_res_racks[indx]
-        new_item.offset = (off_wrack[1], off_wrack[2], off_wrack[3])
-        indx = find_slot_in_nestedlist_4rack(exp.res_plate_names, slot_num)
-        plate_name = exp.res_plate_names[indx][1]
-        new_item.name = plate_name
-        label = exp.find_label(plate_name)
-        res_vol = exp.find_max_res_vol(plate_name)
-        new_item.label = str(label) + str(slot_num)
-        new_item.max_vol = res_vol
-        # print(new_item)  # debug
-        temp_list.append(new_item)
-    exp.res_plate_wells = temp_list  # list of RackData objects
-    # make a list of RackData items for each sam rack
-    temp_list = []
-    for slot_num in exp.slots_sam_plates:
-        new_item = RackData(slot_num, 'sam')
-        indx = find_slot_in_nestedlist_4rack(exp.offsets_sam_racks, slot_num)
-        off_wrack = exp.offsets_sam_racks[indx]
-        new_item.offset = (off_wrack[1], off_wrack[2], off_wrack[3])
-        indx = find_slot_in_nestedlist_4rack(exp.sam_plate_names, slot_num)
-        plate_name = exp.sam_plate_names[indx][1]
-        new_item.name = plate_name
-        label = exp.find_label(plate_name)
-        res_vol = exp.find_max_res_vol(plate_name)
-        new_item.label = str(label) + str(slot_num)
-        new_item.max_vol = res_vol
-        # print(new_item)  # debug
-        temp_list.append(new_item)
-    exp.sam_plate_wells = temp_list  # list of RackData objects
+    def create_rack_list(slots, nested_offsets, nested_names):
+        # collect data on res/sam racks into lists of RackData objects
+        # make a list of RackData items for each res rack
+        rack_list = []  # list of RackData objects
+        for slot_number in slots:
+            # go through list of reservoir rack slots from user_config_exp()
+            new_item = RackData(slot_number, 'res')  # new rack data class instance for this slot
+            index = find_slot_in_nestedlist_4rack(nested_offsets, slot_number)
+            off_wrack = nested_offsets[index]  # select correct offset for this slot_num
+            new_item.offset = (off_wrack[1], off_wrack[2], off_wrack[3])  # where zero is slot_num
+            index = find_slot_in_nestedlist_4rack(nested_names, slot_number)
+            plate_name = nested_names[index][1]  # select correct plate name for this slot_num
+            new_item.name = plate_name  # assign plate name
+            label = exp.find_label(plate_name)  # find the correct label for this rack
+            res_vol = exp.find_max_res_vol(plate_name)  # find the correct max volume for wells in this rack
+            new_item.label = str(label) + str(slot_number)  # assign label for this rack
+            new_item.max_vol = res_vol  # assign max volume for wells in this rack
+            # print(new_item)  # debug
+            rack_list.append(new_item)  # append to list
+        return rack_list
+
+    # generate list of RackData objects for reservoir and sample racks
+    exp.res_plate_wells = create_rack_list(exp.slots_res_racks, exp.offsets_res_racks, exp.res_plate_names)
+    exp.sam_plate_wells = create_rack_list(exp.slots_sam_plates, exp.offsets_sam_racks, exp.sam_plate_names)
 
     # calculate totals for samples and reservoirs, as well as
     # total number of waste, rinse, and solution wells
@@ -1278,16 +1282,17 @@ def calc_nums_exp(exp: ExperimentData):
         str_out = "WARNING: No small pipette loaded. (Not needed for this script.)"
         print(str_out)
 
-    # from res_data, identify number of wells in each rack,
+    # from res_data input by user in user_config_exp(),
+    # identify number of wells used in each rack,
     # list well-numbers, find locations for solution wells,
     # make a list of contents, determine if dilutions needed
     # each = ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM),
     #           (end_vol_uL, end_conc_uM), & 'contents')
     # then modify: exp.res_plate_wells
-    sol_res_locs = []
-    start_conc = []
-    end_conc = []
-    content_types = []
+    sol_res_locs = []  # solution reservoir locations
+    start_conc = []  # list of starting concentrations
+    end_conc = []  # list of ending concentrations
+    content_types = []  # list of content types, excludes waste/rinse
     res_input = deepcopy(exp.res_data)  # res_data contents in user_config_exp()
     for in_res in res_input:
         # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), & 'contents')
@@ -1310,14 +1315,14 @@ def calc_nums_exp(exp: ExperimentData):
             start_conc.append(starting[1])  # start concentration (not sorted)
             end_conc.append(ending[1])  # end concentration (not sorted)
             if content not in content_types:
-                content_types.append(content)  # list of content types
+                content_types.append(content)  # append to list of content types
     for rack in exp.res_plate_wells:
         rack.well_ids = tuple(rack.well_ids)  # convert list of well_ids in RackData object
-    exp.sol_res_loc = tuple(sol_res_locs)
-    exp.content_types = tuple(content_types)
-    exp.num_cont_types = len(content_types)
+    exp.sol_res_loc = tuple(sol_res_locs)  # immutable list of solution reservoir locations
+    exp.content_types = tuple(content_types)  # immutable list of content types
+    exp.num_cont_types = len(content_types)  # number of contents, excludes waste/rinse
     if start_conc != end_conc:
-        print("Dilutions needed.")  # debug
+        print("Dilutions are needed.")  # debug
         exp.do_dilutions = True  # compare before/after lists (not sorted)
 
     # from sam_data, identify number of wells in each sam rack & list well-numbers
@@ -1333,11 +1338,12 @@ def calc_nums_exp(exp: ExperimentData):
         res_locs = in_sam[1]  # (num_sol, (rack_num, well_id, 'sol', vol_frac),...)
         if sam_loc[2] != 'sam':
             print("Warning, first item of each sam_data item must be (slot_num, well_id, 'sam')")
-        sam_slot = sam_loc[0]
-        sam_well = sam_loc[1]
-        sam_loc = (sam_slot, sam_well)
+        sam_slot = sam_loc[0]  # rack slot num
+        sam_well = sam_loc[1]  # well id
+        sam_loc = (sam_slot, sam_well)  # location
         num_inoc_res = res_locs[0]  # number of inoculation solutions
-        sum_frac = 0.0
+        sum_frac = 0.0  # total fraction of all inoculation solutions
+        # check inoculation reservoir locations
         for each_res in range(1, num_inoc_res + 1):
             res_loc = res_locs[each_res]  # for each inoc res loc listed in user_config_exp()
             res_slot = res_loc[0]  # Slot_#
@@ -1345,13 +1351,14 @@ def calc_nums_exp(exp: ExperimentData):
             sum_frac = sum_frac + res_loc[3]
             if res_loc[2] != 'sol':
                 print("Warning, data in inoc_sol_locs of each sam_data item must be (slot_num, well_id, 'sol')")
-            res_loc = (res_slot, res_well)
+            res_loc = (res_slot, res_well)  # reservoir location
             if res_loc not in exp.sol_res_loc:
                 s_out = "Inoculation reservoir " + str(res_loc) \
                         + " for sample " + str(sam_loc) \
                         + " is invalid, check user_config_exp"
                 print(s_out)
                 raise StopExecution
+        # check volume fraction
         if sum_frac > 1.0:
             s_out = "Volume fraction sum for sample " + str(sam_loc) \
                     + "exceeds 1.0, check user_config_exp"
@@ -1367,7 +1374,7 @@ def calc_nums_exp(exp: ExperimentData):
     exp.cur_waste = exp.waste_res_loc[0]
     exp.cur_rinse = exp.rinse_res_loc[0]
 
-    # print summary:
+    # print summary for user/debugging:
     # print info about reservoirs
     for plate in exp.res_plate_wells:
         str_out = "Reservoir plate on slot " + str(plate.slot) + " labeled " + str(plate.label) \
@@ -1383,12 +1390,18 @@ def calc_nums_exp(exp: ExperimentData):
     return exp
 
 
+# Run second, after calc_nums_exp()
 def set_up_res_sam_data(exp: ExperimentData):
-    # populates the experiment's all_res_data
-    # and determines if dilution is needed
+    # Populates the experiment's all_res_data and all_samples,
+    # which are modifiable, nested list of ResWellData data objects.
+    # Assigns locations, contents, starting & goal concentrations & volumes.
+    # Assigns inoculation and incubation information to sample data.
+    # Assigns tip locations to each reservoir and sample well.
+    # Determines if dilution needed for each res. Finds max incubation time.
+    # Determines the inoculation order for each sample based on incubation time
 
-    # select the first tip
     which_pipette = 'large'  # using large pipette
+    # select the first tip for the plan:
     next_tip_loc = exp.available_tips_lg[exp.which_tip_lg]  # first tip
     print("Selecting first ", which_pipette, " tip in loc: ", next_tip_loc)  # debug
 
@@ -1405,19 +1418,19 @@ def set_up_res_sam_data(exp: ExperimentData):
         s_out = "Location # " + str(find_loc) + " is not in nested list of reservoirs."
         raise ValueError(s_out)
 
-    all_res_input = deepcopy(exp.res_data)
-    res_racks = deepcopy(exp.res_plate_wells)
+    all_res_input = deepcopy(exp.res_data)  # sample data inputted in user_config_exp
+    res_racks = deepcopy(exp.res_plate_wells)  # rack data generated by calc_nums_exp
     res_data_set = []  # list of ResWellData objects (nested by rack), includes waste and rinse
     for rack in res_racks:
         # print(rack)  # debug
-        slot_num = rack.slot
-        num_wells = rack.num_wells
-        wells_ids = rack.well_ids
-        max_vol = rack.max_vol
-        rack_set = []
+        slot_num = rack.slot  # rack slot number from OT2 Deck
+        num_wells = rack.num_wells  # number of wells on this rack
+        wells_ids = rack.well_ids  # well ids on this rack
+        max_vol = rack.max_vol  # max volume for wells in this rack
+        rack_set = []  # list of ResWell data objects for this rack
         for well_indx in range(num_wells):
-            well_id = wells_ids[well_indx]
-            res_loc = (slot_num, well_id)
+            well_id = wells_ids[well_indx]  # choose well from wells in this rack
+            res_loc = (slot_num, well_id)  # location of this reservoir (rack,well)
             res_data_indx = find_loc_in_nested_list(all_res_input, res_loc)
             # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), 'contents')
             in_res = all_res_input[res_data_indx]
@@ -1425,77 +1438,94 @@ def set_up_res_sam_data(exp: ExperimentData):
             ending = in_res[2]  # (end_vol_uL, end_conc_uM)
             content = in_res[3]  # res_data contents
             new_res = ResWellData()  # new ResWell object
-            new_res.plate_slot_num = slot_num
-            new_res.well_id_num = well_id
-            new_res.loc = res_loc
-            new_res.max_vol = max_vol
-            new_res.curr_vol = starting[0]
-            new_res.dig_vol = new_res.curr_vol
-            new_res.curr_conc = starting[1]
-            new_res.goal_vol = ending[0]
-            new_res.goal_conc = ending[1]
-            new_res.contents = content
+            new_res.plate_slot_num = slot_num  # slot number for rack
+            new_res.well_id_num = well_id  # well id on rack
+            new_res.loc = res_loc  # (Slot_#, Well_#)
+            new_res.max_vol = max_vol  # max volume for wells in this rack
+            new_res.curr_vol = starting[0]  # start_vol_uL
+            new_res.dig_vol = new_res.curr_vol  # start_vol_uL
+            new_res.curr_conc = starting[1]  # start_conc_uM
+            new_res.goal_vol = ending[0]  # goal end_vol_uL
+            new_res.goal_conc = ending[1]  # goal end_conc_uM
+            new_res.contents = content  # content
             if new_res.curr_conc < new_res.goal_conc:
-                new_res.dilution_complete = False
-            new_res.assigned_tip = next_tip_loc
+                new_res.dilution_complete = False  # record if dilution to obtain res needed
+            new_res.assigned_tip = next_tip_loc  # assign tip
             next_tip_loc = exp.find_next_tip(which_pipette)  # find next tip loc
             # print(new_res)  # debug
             rack_set.append(new_res)  # list of ResWell objects corresponding to this rack
         res_data_set.append(rack_set)  # nested list of ResWellData objects corresponding to all racks
-    exp.all_res_data = res_data_set  # modifiable, nested list of ResWellData objects
+    exp.all_res_data = res_data_set  # modifiable, nested list of ResWellData objects, grouped by racks
 
-    all_sam_input = deepcopy(exp.sam_data)
-    sam_racks = deepcopy(exp.sam_plate_wells)
+    all_sam_input = deepcopy(exp.sam_data)  # sample data inputted in user_config_exp()
+    sam_racks = deepcopy(exp.sam_plate_wells)  # sample rack data generated by calc_nums_exp()
     sam_data_set = []  # list of SamWellData objects (nested by rack)
+    sam_incub_set = []  # list of [(sam_incub_time, (sam_loc)),...], not ordered or nested by rack
+    max_incub_time = 0  # max incubation time for all samples
     for rack in sam_racks:
         print(rack)  # debug
-        slot_num = rack.slot
-        num_wells = rack.num_wells
-        wells_ids = rack.well_ids
-        max_vol = rack.max_vol
+        slot_num = rack.slot  # find the slot_num for this rack
+        num_wells = rack.num_wells  # find number of wells in this rack
+        wells_ids = rack.well_ids  # list of wells in this rack
+        max_vol = rack.max_vol  # max vol for wells in this rack
         if exp.start_dry:
-            start_vol = 0
+            start_vol = 0  # if samples start dry, volume zero
         else:
-            start_vol = max_vol
-        rack_set = []
+            start_vol = max_vol  # if samples start with solution in wells
+        rack_set = []  # list of ResWell data objects for this rack
         for well_indx in range(num_wells):
-            well_id = wells_ids[well_indx]
-            sam_loc = (slot_num, well_id)
-            in_sam_data_indx = find_loc_in_nested_list(all_sam_input, sam_loc)
-            in_sam = all_sam_input[in_sam_data_indx]
+            well_id = wells_ids[well_indx]  # choose well from wells in this rack
+            sam_loc = (slot_num, well_id)  # location of this sample (rack,well)
+            in_sam_data_indx = find_loc_in_nested_list(all_sam_input, sam_loc)  # find sample data by location
+            in_sam = all_sam_input[in_sam_data_indx]  # select sample data (by location)
             # (sam_loc, (num_inoc,(inoc_sol_loc),...), (incub_info), 'sam_name')
             res_locs = in_sam[1]  # (num_sol, (rack_num, well_id, 'sol', vol_frac),...)
             incub_info = in_sam[2]  # (targ_incub_min,num_mixes,num_rinses)
             sam_name = in_sam[3]  # sample name
-            new_sam = SamWellData()
-            new_sam.sample_name = sam_name
-            new_sam.slot_num = slot_num
-            new_sam.well_id = well_id
-            new_sam.loc = sam_loc
-            new_sam.targ_incub_time_m = incub_info[0]
-            new_sam.targ_num_mixes = incub_info[1]
-            new_sam.targ_num_rinses = incub_info[2]
-            new_sam.max_vol = max_vol
-            new_sam.dig_vol = start_vol
+            new_sam = SamWellData()  # new data object for sample
+            new_sam.sample_name = sam_name  # transfer sample name
+            new_sam.slot_num = slot_num  # sample rack OT2 Deck slot
+            new_sam.well_id = well_id  # well id on the rack, zero to num_wells-1
+            new_sam.loc = sam_loc  # Sample location (rack_num, well_id)
+            targ_incub_m = incub_info[0]  # targ_incub_min
+            new_sam.targ_num_mixes = incub_info[1]  # target num_mixes
+            new_sam.targ_num_rinses = incub_info[2]  # target num_rinses
+            new_sam.targ_incub_time_m = targ_incub_m  # targ_incub_min
+            new_sam.max_vol = max_vol  # max volume for wells in sample rack
+            new_sam.dig_vol = start_vol  # start volume for sample well
             num_inoc_res = res_locs[0]  # number of inoculation solutions
-            new_sam.num_inoc_sol = num_inoc_res
-            inoc_locs = []
-            inoc_fracs = []
+            new_sam.num_inoc_sol = num_inoc_res  # number of inoculation solutions
+            inoc_locs = []  # inoculation locations for this sample
+            inoc_fracs = []  # inoculation fractions for above locations
             for each_res in range(1, num_inoc_res):
                 res_loc = res_locs[each_res]  # (rack_num, well_id, 'sol', vol_frac)
                 res_slot = res_loc[0]  # Slot_#
                 res_well = res_loc[1]  # Well_#
                 res_frac = res_loc[3]  # volume_fraction
-                res_loc = (res_slot, res_well)
-                inoc_locs.append(res_loc)
-                inoc_fracs.append(res_frac)
-            new_sam.inoc_locs = tuple(inoc_locs)
-            new_sam.inoc_fracs = tuple(inoc_fracs)
-            new_sam.assigned_tip = next_tip_loc
+                res_loc = (res_slot, res_well)  # (Slot_#, Well_#)
+                inoc_locs.append(res_loc)  # append to locations
+                inoc_fracs.append(res_frac)  # append to fractions
+            new_sam.inoc_locs = tuple(inoc_locs)  # inoculation locations for this sample
+            new_sam.inoc_fracs = tuple(inoc_fracs)  # inoculation fractions for above locations
+            new_sam.assigned_tip = next_tip_loc  # assign tip
             next_tip_loc = exp.find_next_tip(which_pipette)  # find next tip loc
+            add_incub = (targ_incub_m, sam_loc)  # incubation_time, (rack_num, well_id)
+            if targ_incub_m > max_incub_time:
+                max_incub_time = targ_incub_m  # find max incubation time
+            sam_incub_set.append(add_incub)  # list of (incubation_time, (rack_num, well_id))
             rack_set.append(new_sam)  # list of ResWell objects corresponding to this rack
         sam_data_set.append(rack_set)  # nested list of SamWellData objects corresponding to all racks
-    exp.all_samples = sam_data_set  # modifiable, nested list of SamWellData objects
+    exp.all_samples = sam_data_set  # modifiable, nested list of SamWellData objects, grouped by racks
+
+    if exp.incub_longest_first:
+        sam_incub_set.sort(reverse=True)  # order by incubation time, the longest first
+    else:
+        sam_incub_set.sort()  # order by incubation time, the shortest first
+    incub_locs = []  # list of samples in order of inoculation
+    for item in sam_incub_set:
+        incub_locs.append(item[1])  # (incubation_time, (rack_num, well_id))
+    exp.incub_loc_order = tuple(incub_locs)  # make immutable
+    exp.max_incub_m = max_incub_time  # record max incubation time
 
     # print debug info:
     # for rack in exp.all_res_data:
@@ -1509,6 +1539,7 @@ def set_up_res_sam_data(exp: ExperimentData):
     return exp
 
 
+# Run third, after set_up_res_sam_data()
 def plan_dil_series(exp: ExperimentData):
     # plan dilution series:
     # double-checking that dilution is required
@@ -1517,12 +1548,15 @@ def plan_dil_series(exp: ExperimentData):
         return exp
 
     def find_par_calc_tranf(dil_subset: list[ResWellData]):
-        #
+        # Function finds dilution parent and transf_vol for list of ResWellData objects
+        # with the same content. Warnings raised if errors encountered.
+        # Returns sublist with goal-concentration in reverse order (highest to lowest)
         dil_subset.sort(key=lambda x: x.goal_conc, reverse=False)  # sort subset by goal_conc
         # sorted from the lowest goal concentration to the highest (reverse = False)
         # res_set_per_content.append(res_subset)
-        content_type = dil_subset[0].contents
-        num_subset = len(res_subset)
+        content_type = dil_subset[0].contents  # type of contents
+        num_subset = len(res_subset)  # length of the list
+        # run check of subset and print info for user debugging
         print("--------------------------------------------------------------------------------")  # debug
         print("Identifying parent for each dilution child w content: ", content_type)  # debug
         print("id, loc,   cur_vol,  goal_vol,  goal_conc, curr_conc")  # debug
@@ -1532,8 +1566,11 @@ def plan_dil_series(exp: ExperimentData):
                   "  ", child_res.goal_conc, "  ", child_res.curr_conc)  # debug
             if child_res.contents != content_type:
                 s_out = "Reservoir subset sent to find_par_calc_tranf is not all of content type: " + str(content_type)
-                raise ValueError(s_out)
+                raise ValueError(s_out)  # double checks that the content is identical.
 
+        # check each item on the list to see if dilution needed, recall that list is currently
+        # sorted from the lowest goal concentration to the highest (reverse = False)
+        # then find parent and transfer volume
         for res_id in range(num_subset):
             # for each in range(num_subset - 1):
             child_res = res_subset[res_id]
@@ -1547,30 +1584,37 @@ def plan_dil_series(exp: ExperimentData):
                 tran_mod = 1  # transf_vol mod 100 uL
                 orig_vol = child_res.goal_vol  # w/o mods, goal volume for child_res
                 loop_num = 0  # fail-safe to prevent infinite loop
+                # when transfer volume is not divisible by 100 uL --> find parent, calc transf_vol
                 while tran_mod > 0:
                     loop_num += 1  # fail-safe to prevent infinite loop
                     # recall res_subset sorted from the lowest goal concentration to highest
-                    parent_id += 1  # selecting next as parent
-                    if loop_num > 1:
+                    parent_id += 1  # selecting next higher concentration as parent
+                    if loop_num > 1:  # skip first iteration
                         print("Pipette cannot transfer: ", tran_mod, "uL")  # debug
                     if parent_id >= num_subset or loop_num > 10:
+                        # if parent id exceeds number of items in the subset
+                        # or the number of times tried exceeds 10, warn user and quit
                         print("WARNING: Alternative dilution parent not available for reservoir in loc ", child_res.loc)
                         break
-                    parent_res = res_subset[parent_id]
+                    parent_res = res_subset[parent_id]  # selecting next higher concentration as parent
                     print("Choosing parent for dilution ", parent_id, parent_res.loc,
                           " with concentration ", parent_res.goal_conc, " uM")
                     # ratio of child to parent concentration
                     conc_ratio_chi_par = child_res.goal_conc / parent_res.goal_conc
-                    transf_vol = int(conc_ratio_chi_par * child_res.goal_vol)
-                    tran_mod = int(transf_vol % 100)  # need to round to 100 uL
+                    transf_vol = int(conc_ratio_chi_par * child_res.goal_vol)  # calculate transfer volume
+                    tran_mod = int(transf_vol % 100)  # round mod to 100 uL, due to 'large' pipette restrictions
                     # print("Transferring: ", transf_vol)  # debug
+                    # if transfer volume is not divisible by 100 uL,
+                    # and fewer than 3 loops have run for this child
                     if tran_mod > 0 and loop_num < 3:
-                        transf_vol = int(transf_vol - tran_mod + 100)
-                        new_goal_vol = int(transf_vol / conc_ratio_chi_par)
+                        transf_vol = int(transf_vol - tran_mod + 100)  # try increasing transf volume
+                        new_goal_vol = int(transf_vol / conc_ratio_chi_par)  # calculate new goal volume for child
                         # and tran_mod % 10 == 0
                         # increase transfer volume,  mod to be divisible to 100
                         # print("Changing transf_vol to ", transf_vol,
                         #       ", with goal volume ", new_goal_vol) # debug
+                        # if new goal volume is divisible by 100 uL,
+                        # change the child reservoir goal vol and calculate again with the same parent
                         if new_goal_vol % 100 == 0:
                             child_res.goal_vol = new_goal_vol  # change goal vol
                             parent_id -= 1  # keep the same parent and try again
@@ -1580,22 +1624,25 @@ def plan_dil_series(exp: ExperimentData):
                             #       " uM to goal volume ", this_res.goal_vol, "uL")  # debug
                         # else:
                         #     print("Volume incompatible with pipette")
+                    # if transfer vol is not divisible
+                    # and same parent tried more than 3 times
                     elif tran_mod > 0 and loop_num >= 3:
                         child_res.goal_vol = orig_vol  # returning to original volume if tried increasing thrice
                         # print("Changing", this_res.loc, " with concentration: ",
                         #       this_res.goal_conc, " uM BACK to goal volume ", this_res.goal_vol, "uL")  # debug
+                # if parent id exists, increase parent's goal_volume by transfer amount
                 if parent_id < (num_subset - 1):
-                    # if parent id exists, increase parent's goal_volume by transfer amount
                     parent_res.goal_vol = parent_res.goal_vol + transf_vol
                     if parent_res.goal_vol > parent_res.max_vol:
                         parent_res.goal_vol = parent_res.max_vol
                         print("WARNING: adjusting parent volume to max for loc ", parent_res.loc)
                     print("Changing parent", parent_res.loc, " volume to ", parent_res.goal_vol)  # debug
-                child_res.parent_conc = parent_res.goal_conc
-                child_res.parent_loc = parent_res.loc
-                child_res.par_transf_vol = transf_vol
+                child_res.parent_conc = parent_res.goal_conc  # update parent concentration for child reservoir
+                child_res.parent_loc = parent_res.loc  # update parent location for child reservoir
+                child_res.par_transf_vol = transf_vol  # update transfer volume for child reservoir
         res_subset.sort(key=lambda x: x.goal_conc, reverse=True)  # sort subset by goal_conc
         # sorted from the highest goal concentration to the lowest (reverse = True)
+        # print info for user debugging
         print("____________________________________________________________________________")  # debug
         print("Updated subset of content type: ", content_type)  # debug
         print("id, loc, goal_conc, goal_vol, parent, p_conc, tf_vol")  # debug
@@ -1606,22 +1653,23 @@ def plan_dil_series(exp: ExperimentData):
         print("--------------------------------------------------------------------------------")  # debug
         return dil_subset
 
-    # res_data = exp.all_res_data  # alias
+    # res_data = exp.all_res_data  # alias - can be modified incorrectly
+    # modifiable, nested list of ResWellData objects, grouped by racks
     res_data = deepcopy(exp.all_res_data)  # not alias - needs to be copied back
-    num_types = exp.num_cont_types
+    num_types = exp.num_cont_types  # number of content types, excludes waste/rinse
 
-    res_set_per_content = []
+    res_set_per_content = []  # nested list of ResWellData objects, grouped by content type
     for type_indx in range(num_types):
-        this_type = exp.content_types[type_indx]
+        this_type = exp.content_types[type_indx]  # iterate through content types
         print("Content type: ", this_type)  # debug
         res_subset = []  # empty sublist of one content type
         for res_set_rack in res_data:
             for res in res_set_rack:
-                check_contents = res.contents
+                check_contents = res.contents  # check contents
                 if check_contents == this_type:
-                    res_subset.append(res)
+                    res_subset.append(res)  # add to res_subset
                     # print(check_contents, res.loc, res.dilution_complete)  # debug
-        res_subset = find_par_calc_tranf(res_subset)  # finds dilution parents, transf_vol
+        res_subset = find_par_calc_tranf(res_subset)  # finds dilution parents, transf_vol for this content list
         # returns sublist with goal-concentration in reverse order (highest to lowest)
         res_set_per_content.append(res_subset)
 
@@ -1676,9 +1724,8 @@ def plan_dil_series(exp: ExperimentData):
                 action_set.append(new_action)  # add to list of actions
                 print(new_action)  # debug
 
-    exp.all_res_data = res_data  # copy res_data back to exp
+    exp.all_res_data = res_data  # copy res_data back to exp, since deepcopy was used
     exp.pln_dilut_seq = action_set  # copy dilution action set
-
 
     return exp
 
@@ -1691,21 +1738,15 @@ def config_samples(exp: ExperimentData):
     # MODIFY description of components
 
     exp = calc_nums_exp(exp)  # first, calc the totals in exp, set up rack data, print rack info
-    exp = set_up_res_sam_data(exp)  # second, set up data for reservoirs and sample wells
+    exp = set_up_res_sam_data(exp)  # second, set up data for reservoirs and sample wells,
+    # also, obtain order of inoculation exp.incub_loc_order
     if exp.do_dilutions:
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # third, plan dilution series
 
-    this_action = ActionInfo(this_sam_indx, 'mix', sam_timestamp)
-    this_action.change_tip(sample.assigned_tip)  # load tip
-
-    # second, find the order of SAMPLE incubation:
-    # sort by the length of incubation time to produce index of wells in time-order
-    # then, find the order that the wells should be inoculated and then incubated
-    # where each value exp.sam_timing[i] indicates WHEN that sample(exp.sample_names[i])
-    # should be loaded, where a value of 0 is FIRST, & (sam_num-1) is LAST
-    exp.sam_indx_in_order = give_list_order(exp.sam_targ_incub_times_min)  # inoculation order
-    exp.sam_timing = give_list_order(exp.sam_indx_in_order)  # when to inoculate, sam-ordered!
+    # TODO: start here on 4/14/23
+    sam_data_set = deepcopy(exp.all_samples)
+    incubation_order = exp.incub_loc_order
 
     # lastly, set up data for SAMPLES
     # sort the samples by plate location and by well
@@ -1899,6 +1940,8 @@ def user_config_exp():
     my_exp.start_dry = False
     # Store samples wet (max_vol DI rinse) or dry - w/o liquid
     my_exp.store_dry = False
+    # Indicate incubation order, with the longest incubation time first
+    my_exp.incub_longest_first = True
 
     # Fourth, for each reservoir well, indicate the following:
     # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
