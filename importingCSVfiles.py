@@ -120,6 +120,6 @@ with open('action_sequence.csv', 'w') as file:
     writer = csv.writer(file)
     writer.writerow(["sam_id", "action", "start_stamp", "end_stamp"])
     for action in exp.planned_sequence:
-        writer.writerow([action.sam_id, action.action,action.start, action.end])
+        writer.writerow([action.keeper, action.action, action.start, action.end])
 
 with open('action_sequence.csv', 'w') as file:

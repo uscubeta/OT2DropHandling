@@ -1168,7 +1168,7 @@ def plan_dil_series(exp: ExperimentData):
                     print("each_data: ", each_data, "ResWell location: ", this_data.loc)  # debug
                 print("Add actions: transfer, dilute, mix.")  # debug
                 this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
-                this_action.change_tip(sample.which_tip_loc)  # load tip
+                this_action.change_tip(sample.assigned_tip)  # load tip
             # START HERE: keep track of the order (when tracking subsets)
         exp.res_dil_order = res_dil_order
     print(exp.num_cont_types)
@@ -1192,7 +1192,7 @@ def config_samples(exp: ExperimentData):
 
 
     this_action = ActClass(this_sam_indx, 'mix', sam_timestamp)
-    this_action.change_tip(sample.which_tip_loc)  # load tip
+    this_action.change_tip(sample.assigned_tip)  # load tip
 
     # second, find the order of SAMPLE incubation:
     # sort by the length of incubation time to produce index of wells in time-order
