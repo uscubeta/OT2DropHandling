@@ -498,8 +498,10 @@ class SamWellData:
 
 
 class ActionInfo:
-    def __init__(self, keeper: (int, int), sub_action: str, top_action: str, order_num: int, start_time_s: int,
-                 parent=(1, 0), targ=(1, 0), vol=0, tip=(11, 0), num_mixes=3, is_complex=True):
+    def __init__(self, keeper: (int, int), sub_action: str, top_action: str,
+                 order_num: int, start_time_s: int,
+                 parent=(1, 0), targ=(1, 0), vol=0, tip=(11, 0),
+                 num_mixes=3, is_complex=True):
         # par = from loc, targ = to loc, tip loc, vol, and is_complex are optional parameters
         # initializing function, _attribute is a hidden attribute!
         self._transf_time_s = 20  # est. time, in seconds, for 'transfer' SIMPLE action
@@ -1491,9 +1493,11 @@ def set_up_res_sam_data(exp: ExperimentData):
         s_out = "Location # " + str(find_loc) + " is not in nested list of reservoirs."
         raise ValueError(s_out)
 
-    def list_actions_each_sam(sam: SamWellData):
+    def list_actions_each_sam(sam: SamWellData, exp: ExperimentData):
         # todo: add res data so list_action can update dig_vol
         sam_loc = sam.loc  # (plate_indx, well_indx)
+        sam_indx = exp.find_sam_in_nest_list(sam_loc)  # find indices for sam
+        sam_res = exp.all_samples[sam_indx[0]][sam_indx[1]]  # select sam well data # ALIAS
         sam_vol = sam.max_vol  # total volume in sample "well"
         sam_ord = sam.sam_inoculation_timing  # for sorting when consolidating actions
         sam_tip = sam.assigned_tip  # will be updated when complex step is split up
@@ -1509,34 +1513,52 @@ def set_up_res_sam_data(exp: ExperimentData):
 
         # TODO: start here on 5/4/23
 
-        # start by loading/inoculating the sample
-        act_type = 'load'
-        is_complex = True  # load is a complex action with 2 steps, 2 tips
-        num_mixes = 3  # number of mixes AFTER load action, with sample tip
-        for i in range(num_inoc):
-            inoc_loc = sam.inoc_locs[i]
-            inoc_frac = sam.inoc_fracs[i]
-            inoc_vol = max_vol * inoc_frac
-            new_action = ActionInfo(sam_loc, act_type, act_type,
-                                    sam_ord, time_stmp,
-                                    inoc_loc, sam_loc, inoc_vol,
-                                    sam_tip, num_mixes, is_complex)
-            time_stmp = new_action.end  # update the next start time
-            sam_sequence.append(new_action)  # add to list of actions
-        #
-        # this_action.change_tip(sample.assigned_tip)  # load tip
-        # # current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
-        # sam_sequence.append(this_action)
+        # start by loading/reloading/inoculating the sample
+        loaded = False
+        if num_reload > 0:  # calc gap time if reloading
+            gap_time = exp.max_time_before_evap_m * 60
+        for itr_load in range(num_reload + 1):
+            if not loaded:  # for the first instance, just 'load'
+                act_type = 'load'  # action type 'load' is the same as 'reload'
+            else:  # for the second+ instances, 'reload'
+                act_type = 'reload'  # action type 'load' is the same as 'reload'
+            is_complex = True  # load is a complex action with 2 steps, 2 tips
+            num_mixes = 3  # number of mixes AFTER load action, with sample tip
+            for this_inoc in range(num_inoc):
+                inoc_loc = sam.inoc_locs[this_inoc]
+                inoc_frac = sam.inoc_fracs[this_inoc]
+                inoc_vol = max_vol * inoc_frac
+                res_indx = exp.find_res_in_nest_list(inoc_loc)  # find indices for res
+                inoc_res = exp.all_res_data[res_indx[0]][res_indx[1]]  # select inoc res # ALIAS
+                new_action = ActionInfo(sam_loc, act_type, act_type,
+                                        sam_ord, time_stmp,
+                                        inoc_loc, sam_loc, inoc_vol,
+                                        sam_tip, num_mixes, is_complex)
+                inoc_res.dig_vol -= inoc_vol  # reduce dig volume for inoculation res
+                sam_res.dig_vol += inoc_vol  # increase dig volume for sample well
+                if inoc_res.dig_vol < 0:
+                    s_out = "Reservoir " + str(inoc_loc) + " does not have sufficient volume for this exp!"
+                    raise ValueError(s_out)
+                if sam_res.dig_vol > sam_res.max_vol:
+                    s_out = "Sample well " + str(sam_loc) + "will be overfilled during this load step! " \
+                                                            "Check volume fractions. "
+                    raise ValueError(s_out)
+                time_stmp = new_action.end  # update the next start time
+                sam_sequence.append(new_action)  # add to list of actions
+            end_load_time = time_stmp
+            unload_time = end_load_time + incub_time
+        if num_reload > 0:
+            gap_time = exp.max_time_before_evap_m * 60
 
         gap_time = math.ceil(incub_time / (num_mix + 1))
-        for i in range(num_mix):
+        for itr_load in range(num_mix):
             time_stmp = time_stmp + gap_time
             this_action = ActionInfo(this_sam_indx, 'mix', time_stmp)
             this_action.change_tip(sample.assigned_tip)  # load tip
             sam_sequence.append(this_action)
         # the timestamps for 'reload' will be resorted at the end
-        for i in range(sample.targ_num_reload):
-            gap_time = (i + 1) * max_time_before_evap_m * 60
+        for itr_load in range(sample.targ_num_reload):
+            gap_time = (itr_load + 1) * max_time_before_evap_m * 60
             this_action = ActionInfo(this_sam_indx, 'reload', gap_time)
             this_action.change_tip(sample.assigned_tip)  # load tip
             sam_sequence.append(this_action)
@@ -1550,7 +1572,7 @@ def set_up_res_sam_data(exp: ExperimentData):
         add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks
         tip_ids.append(add_tip)  # new tip to rinse, every rinse
         time_stmp = time_stmp + 3 * rinse_time_s + 60 * max_incub
-        for i in range(sample.targ_num_rinses):
+        for itr_load in range(sample.targ_num_rinses):
             this_action = ActionInfo(this_sam_indx, 'rinse', time_stmp)
             this_action.change_tip(add_tip)
             sam_sequence.append(this_action)
@@ -1564,7 +1586,8 @@ def set_up_res_sam_data(exp: ExperimentData):
                        + str(this_sam_indx) + " on plate # " + str(plate_index) + " & well # " \
                        + str(this_well_on_plate) + " with sequence: "  # debug
 
-        return sam
+        sam_res.targ_act_seq = sam_sequence  # update target sequence of action for this sample
+        return exp  # return experiment data, which updates the ALIASes
 
     # TODO: start here on 4/26/23
     # first, set up reservoir data: exp.all_res_data
