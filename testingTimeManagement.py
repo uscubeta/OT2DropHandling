@@ -140,8 +140,8 @@ class ExperimentData:
         self.max_incub_m = 1  # maximum incubation time for all samples
 
         # currently, using these wells as:
-        self.cur_waste = (1, 2)
-        self.cur_rinse = (1, 0)
+        self.cur_waste = (1, 2)  # updated, as dig_vol or curr_vol is exceeded
+        self.cur_rinse = (1, 0)  # updated, as dig_vol or curr_vol is depleted
 
         self.do_dilutions = False
         self.start_dry = True
@@ -209,6 +209,64 @@ class ExperimentData:
     def __str__(self):
         this_string = "ExperimentData(" + str(self.exp_name) + ")"
         return this_string
+
+    def find_sam_in_nest_list(self, loc: (int, int), sam_list=None):
+        # for the sample with given location (loc) = (plate_indx, well_indx)
+        # finds the nested indices (#,#) in the list, sam_list
+        # if nested list is not specified, using self.all_samples
+        if sam_list is None:
+            sam_list = self.all_samples
+        main_list_length = len(sam_list)
+        for rack_indx in range(main_list_length):
+            sub_list = sam_list[rack_indx]
+            sub_list_length = len(sub_list)
+            for well_indx in range(sub_list_length):
+                sam_data = sub_list[well_indx]
+                if sam_data.loc == loc:
+                    indices = (rack_indx, well_indx)
+                    return indices
+        s_out = "Loc " + str(loc) + " is not in this nested list of samples!"
+        raise ValueError(s_out)
+
+    def find_res_in_nest_list(self, loc: (int, int), res_list=None):
+        # for the reservoir with given location (loc) = (plate_indx, well_indx)
+        # finds the nested indices (#,#) in the list, res_list
+        # if nested list is not specified, using self.all_res_data
+        if res_list is None:
+            res_list = self.all_res_data
+        main_list_length = len(res_list)
+        for rack_indx in range(main_list_length):
+            sub_list = res_list[rack_indx]
+            sub_list_length = len(sub_list)
+            for well_indx in range(sub_list_length):
+                res_data = sub_list[well_indx]
+                if res_data.loc == loc:
+                    indices = (rack_indx, well_indx)
+                    return indices
+        s_out = "Loc " + str(loc) + " is not in this nested list of reservoirs!"
+        raise ValueError(s_out)
+
+    def find_rack_in_res_plates(self, slot_num: int, rack_list=None):
+        if rack_list is None:
+            rack_list = self.res_plate_wells
+        list_length = len(rack_list)
+        for indx in range(list_length):
+            rack = rack_list[indx]
+            if rack.slot == slot_num:
+                return indx
+        s_out = "Slot # " + str(slot_num) + " is not in this list of reservoirs!"
+        raise ValueError(s_out)
+
+    def find_rack_in_sam_plates(self, slot_num: int, rack_list=None):
+        if rack_list is None:
+            rack_list = self.sam_plate_wells
+        list_length = len(rack_list)
+        for indx in range(list_length):
+            rack = rack_list[indx]
+            if rack.slot == slot_num:
+                return indx
+        s_out = "Slot # " + str(slot_num) + " is not in this list of reservoirs!"
+        raise ValueError(s_out)
 
     def find_next_tip(self, which_pip: str):
         # finds the next tip to use in experiment planning
@@ -306,21 +364,21 @@ class RackData:
 
 class ResWellData:
     def __init__(self):
-        self.contents = ''  # solution name/chemical name
-        self.curr_conc = 0  # uM (micromol/L) # used for dilutions  (starting and achieved concentration)
+        self.loc = (1, 0)  # (Slot_#, Well_#), location of this reservoir
+        self.slot_num = 0  # Slot_# for this reservoir's rack, 1-11 on OT2 Deck
+        self.well_id = 0  # Well_# for this reservoir, 0-(num_wells-1) on rack
+        self.assigned_tip = (11, 0)  # (Tip_Slot_#, Tip_#), tip assigned to this reservoir to reduce contamination
+        self.contents = ''  # solution name/chemical name for this reservoir
+        self.curr_conc = 0  # uM (micromol/L) # used for dilutions  ('starting' and 'achieved' concentration)
         self.goal_conc = 0  # uM (micromol/L) # used for dilutions  (goal concentration)
-        self.curr_vol = 0  # uL - starting volume and 'current' solution volume (tracked during solution processing)
-        self.goal_vol = 0  # uL - ending volume after dilutions, prior to sample use
-        self.dig_vol = 0  # uL - keeping track of volume during planning stage, while writing actions
-        self.max_vol = 10000  # uL
-        self.plate_slot_num = 0
-        self.well_id_num = 0
-        self.loc = (1, 0)  # (Slot_#, Well_#)
-        self.parent_loc = (0, 0)
-        self.parent_conc = 0
-        self.par_transf_vol = 0
-        self.dilution_complete = True
-        self.assigned_tip = (11, 0)  # (Slot_#, Tip_#)
+        self.curr_vol = 0  # uL - 'starting' & 'current' volume (tracked during solution processing, not digital twin)
+        self.goal_vol = 0  # uL - ending volume after dilutions, prior to use for sample inoculation
+        self.dig_vol = 0  # uL - digital twin - keeping track of volume during planning stage, while writing actions
+        self.max_vol = 10000  # uL, maximum volume for this reservoir well
+        self.dilution_complete = True  # is dilution complete?  changed after physical action, not digital twin
+        self.parent_loc = (0, 0)  # (Slot_#, Well_#) #  parent for dilution
+        self.parent_conc = 0  # uM, parent concentration for dilution
+        self.par_transf_vol = 0  # uL, transfer volume from parent to this child reservoir
 
     # returns this when calling this object
     def __repr__(self):
@@ -345,39 +403,35 @@ class SamWellData:
     # need a way to save this metadata (MODIFY!!)
     # may want to switch to getters/setters/properties
     def __init__(self):
-        self.sample_name = "USC22Blnk1118a"  # name on the QR-coded label
+
+        self.sample_name = "USC22Blnk1118a"  # name on the QR-coded label of the sample
+        self.loc = (3, 0)  # (plate_indx, well_indx) # tuple has to be replaced, not edited
         self.slot_num = 3  # slot on on OT-2 (eg. num 1 through 11)
         self.well_id = 0  # well index for this sample on plate_indx plate, 0 to 3 for L to R
-        self.loc = (3, 0)  # (plate_indx, well_indx) # tuple has to be replaced, not edited
-        self.assigned_tip = (0, 0)  # (rack, well) - assigned to reduce contamination
-        self.targ_incub_time_m = 1  # target time for incubation (in minutes)
+        self.assigned_tip = (0, 0)  # (rack, well) - tip assigned to sample to reduce contamination
+
+        self.targ_incub_time_m = 1  # int, target time for incubation (in minutes)
+        self.targ_incub_time_s = 60  # int, target time for incubation (in seconds)
         self.targ_num_mixes = 1  # target num. of mixes during incubation
         self.targ_num_rinses = 3  # target num. of rinses after removing incub. liquid
         self.targ_num_reload = 0  # if incubation time is long, will remove and reload incubation liquid
-        self.max_vol = 400  # volume of sample wells, in uL
-        self.dig_vol = 0
-        self.cur_vol = 0
-        self.num_inoc_sol = 1  # number of inoculation solutions
-        self.inoc_locs = ((5, 1),)  # solution locs and volume fractions
-        self.inoc_fracs = (1.0,)
-
-        # self.sam_indx = 0  # sample index from the original user_config_exp
-
-        # self.plate_indx = 0  # plate index for this sample - for use with nested list of sample_set
-
-        self.sam_timing = 0  # where first sample we should load is 0, & last is (sam_num-1)
-        self.assigned_tip = (0, 0)  # (rack, well) - assigned to reduce contamination
-        # self.well_name = 'W1'  # name of the well # irrelevant?
-
-        # self.targ_incub_gap_time_m = 1  # target time in between mixing  (evenly spaced!)
-
         self.rinsed_num = 0  # how often has this sample been rinsed?
         self.mixed_num = 0  # how often has this sample been mixed?
         self.reloaded_num = 0  # how often has this sample been reloaded?
-        self.solution_location = (0, 0)  # location for inoculation from exp.sol_res_loc (slot_indx, well_indx)
-        self.solution_index = 0  # corresponding to index in exp.res_data
-        self.incub_solution = "DI water"  # name of incubation solution
-        self.incub_concen = 0  # uM (micromol/L) molarity of incubation solution
+
+        self.max_vol = 400  # uL, volume of sample wells, in uL
+        self.dig_vol = 0  # uL, digital twin - keeping track of volume during planning stage, while writing actions
+        self.cur_vol = 0  # uL, volume tracked during solution handling
+        self.start_dry = True
+        self.store_dry = False
+
+        self.sam_inoculation_timing = 0  # where first sample we should load is 0, & last is (sam_num-1)
+        self.num_inoc_sol = 1  # number of inoculation solutions
+        self.inoc_locs = ((5, 1),)  # solution locs and volume fractions
+        self.inoc_fracs = (1.0,)  # volume fraction of each incubation solution
+        self.incub_sols = ("DI water",)  # names of incubation solution
+        self.incub_conc = (0,)  # uM (micromol/L) molarity of incubation solutions
+
         self.incub_st_timestmp = 1208125  # start time collected @ time.perf_counter()
         self.incub_end_timestmp = 1208140  # end time collected @ time.perf_counter()
         self.incub_reload_timestmps = []  # eg:[1208225, 1208325, ]  # reload time collected @ time.perf_counter()
@@ -385,9 +439,13 @@ class SamWellData:
         self.rinse_timestmps = []  # eg: [1208225, 1208325, ]  # rinse time collected @ time.perf_counter()
         self.incub_tot_time_s = 15  # integer, in seconds
         self.incub_mix_time_s = []  # eg: [100, 200, ]  # integer, in seconds
-        self.targ_act_seq = List[ActionInfo,]  # in seconds
-        self.pln_seq_stamps = List[ActionInfo,]  # in seconds
-        # where each action is of Class ActClass(sample_index, action, timeline_in_seconds)
+        self.incub_rinse_time_s = []  # eg: [100, 200, ]  # integer, in seconds
+        self.targ_act_seq = List[ActionInfo]  # action list for each sample
+        self.pln_seq_stamps = List[ActionInfo]  # action list with shifted timestamps
+        # where each action is of the class:
+        # ActClass(keeper_loc, 'action', start_time_s,
+        #           parent_loc, targ_loc, transf_vol,
+        #           tip_loc, num_mixes, is_complex)
 
     # returns this when calling this object
     def __repr__(self):
@@ -402,10 +460,9 @@ class SamWellData:
 
 
 class ActionInfo:
-    def __init__(self, keeper: (int, int), action: str, start_time_s: int,
-                 parent=(1, 0), targ=(1, 0), vol=0, tip=(11, 0),
-                 num_mixes=3, is_complex=True):
-        # par = from loc, targ = to loc, tip loc, and is_complex are optional parameters
+    def __init__(self, keeper: (int, int), sub_action: str, top_action: str, order_num: int, start_time_s: int,
+                 parent=(1, 0), targ=(1, 0), vol=0, tip=(11, 0), num_mixes=3, is_complex=True):
+        # par = from loc, targ = to loc, tip loc, vol, and is_complex are optional parameters
         # initializing function, _attribute is a hidden attribute!
         self._transf_time_s = 20  # est. time, in seconds, for 'transfer' SIMPLE action
         self._mix_time_s = 20  # est. time, in seconds, for 'mix' SIMPLE action
@@ -413,10 +470,13 @@ class ActionInfo:
         self._rinse_time_s = 60  # est. time (s) for 'reload' or 'rinse' or 'unload' COMPLEX actions
         self._keeper = keeper  # (rack_num, well_id)  # action belongs to 'keeper'
         # independent of from_loc and to_loc
-        self._action = action  # complex action string
+        self._action = sub_action  # complex or simple action string
         # complex: ['load', 'reload', 'unload', 'rinse'] - multi step, multi-tips
         # simple:  [ 'mix', 'transf' ] - one step, one tip
-        self._simple = not is_complex  # set to True whe complex actions are expanded to simple ones
+        self._top_act = top_action  # complex action string
+        # complex: ['load', 'reload', 'unload', 'rinse', 'dilution', 'only_mix']
+        self._order_num = order_num  # order number used for sorting actions
+        self._complex = is_complex  # set to True whe complex actions are expanded to simple ones
         # complex actions can be swapped, but simple are expanded and cannot be swapped
         self._start_stamp = start_time_s  # integer of start timestamp (seconds) for the desired action
         self._end_stamp = self._calc_end()  # calculated, estimated end timestamp
@@ -462,6 +522,9 @@ class ActionInfo:
     def set_num_mixes(self, num_mixes: int):
         self._num_mixes = num_mixes
 
+    def set_large_act(self, action: str):
+        self._top_act = action
+
     # property/ getter methods
     @property
     def keeper(self):
@@ -470,6 +533,10 @@ class ActionInfo:
     @property
     def action(self):
         return self._action
+
+    @property
+    def complex(self):
+        return self._complex
 
     @property
     def start(self):
@@ -1060,24 +1127,24 @@ def create_exp_sequence(exp: ExperimentData):
 
 
 # used in config_samples
-def give_incubation_order(incub_list: list[int, (int, int)]):
-    # sort a list of incubation values linked to sam_loc
-    # by the VALUES in the list, then return
-    # the index values of the sorted list
-    # eg: (5, 3, 2, 0, ...)
-    temp_list = []
-    ij: int
-    for ij in range(len(some_list)):
-        temp_list.append([some_list[ij], ij])
-    temp_list.sort()  # sort by the first in tuple
-    sort_index: List[int]
-    sort_index = []
-    for xit in temp_list:
-        sort_index.append(xit[1])  # collect second item in tuple
-    sorted_tuple: tuple[int]
-    sorted_tuple = tuple(sort_index)
-    print("Sorted list order is:", sorted_tuple)  # debug
-    return sorted_tuple
+# def give_incubation_order(incub_list: list[int, (int, int)]):
+#     # sort a list of incubation values linked to sam_loc
+#     # by the VALUES in the list, then return
+#     # the index values of the sorted list
+#     # eg: (5, 3, 2, 0, ...)
+#     temp_list = []
+#     ij: int
+#     for ij in range(len(some_list)):
+#         temp_list.append([some_list[ij], ij])
+#     temp_list.sort()  # sort by the first in tuple
+#     sort_index: List[int]
+#     sort_index = []
+#     for xit in temp_list:
+#         sort_index.append(xit[1])  # collect second item in tuple
+#     sorted_tuple: tuple[int]
+#     sorted_tuple = tuple(sort_index)
+#     print("Sorted list order is:", sorted_tuple)  # debug
+#     return sorted_tuple
 
 
 # recursive reverse the list function
@@ -1104,26 +1171,53 @@ def find_list_rack_data(rack_list: list[RackData], slot_num: int):
 def find_res_in_list(res_list: list[ResWellData], loc: (int, int)):
     list_length = len(res_list)
     for res_indx in range(list_length):
-        res = res_list[res_indx]
-        if res.loc == loc:
+        res_data = res_list[res_indx]
+        if res_data.loc == loc:
             return res_indx
     s_out = "Loc " + str(loc) + " is not in this list of reservoirs!"
     raise ValueError(s_out)
 
 
 # keep external to classes
-def find_res_in_nest_list(res_list: list[list[ResWellData]], loc: (int, int)):
-    main_list_length = len(res_list)
-    for rack_indx in range(main_list_length):
-        sub_list = res_list[rack_indx]
-        sub_list_length = len(sub_list)
-        for res_indx in range(sub_list_length):
-            res = sub_list[res_indx]
-            if res.loc == loc:
-                indices = (rack_indx, res_indx)
-                return indices
-    s_out = "Loc " + str(loc) + " is not in this nested list of reservoirs!"
+def find_sam_in_list(sam_list: list[SamWellData], loc: (int, int)):
+    list_length = len(sam_list)
+    for sam_indx in range(list_length):
+        sam_data = sam_list[sam_indx]
+        if sam_data.loc == loc:
+            return sam_indx
+    s_out = "Loc " + str(loc) + " is not in this list of samples!"
     raise ValueError(s_out)
+
+
+# # # moved internal to exp class
+# def find_res_in_nest_list(res_list: list[list[ResWellData]], loc: (int, int)):
+#     main_list_length = len(res_list)
+#     for rack_indx in range(main_list_length):
+#         sub_list = res_list[rack_indx]
+#         sub_list_length = len(sub_list)
+#         for well_indx in range(sub_list_length):
+#             res_data = sub_list[well_indx]
+#             if res_data.loc == loc:
+#                 indices = (rack_indx, well_indx)
+#                 return indices
+#     s_out = "Loc " + str(loc) + " is not in this nested list of reservoirs!"
+#     raise ValueError(s_out)
+
+
+# # moved internal to exp class
+# def find_sam_in_nest_list(sam_list: list[list[SamWellData]], loc: (int, int)):
+#
+#     main_list_length = len(sam_list)
+#     for rack_indx in range(main_list_length):
+#         sub_list = sam_list[rack_indx]
+#         sub_list_length = len(sub_list)
+#         for well_indx in range(sub_list_length):
+#             sam_data = sub_list[well_indx]
+#             if sam_data.loc == loc:
+#                 indices = (rack_indx, well_indx)
+#                 return indices
+#     s_out = "Loc " + str(loc) + " is not in this nested list of samples!"
+#     raise ValueError(s_out)
 
 
 # def find_loc_in_nested_list(res_list, find_loc: (int, int)):
@@ -1411,6 +1505,82 @@ def set_up_res_sam_data(exp: ExperimentData):
         s_out = "Location # " + str(find_loc) + " is not in nested list of reservoirs."
         raise ValueError(s_out)
 
+    def list_actions_each_sam(sam: SamWellData):
+        # todo: add res data so list_action can update dig_vol
+        sam_loc = sam.loc  # (plate_indx, well_indx)
+        sam_vol = sam.max_vol  # total volume in sample "well"
+        sam_ord = sam.sam_inoculation_timing  # for sorting when consolidating actions
+        sam_tip = sam.assigned_tip  # will be updated when complex step is split up
+        incub_time = sam.targ_incub_time_s  # target incubation time in seconds
+        num_inoc = sam.num_inoc_sol  # number of solutions used to inoculate sample
+        num_reload = sam.targ_num_reload  # target number of reloads (based on incubation time)
+        num_mix = sam.targ_num_mixes  # target number of mixes, spread evenly, from user_config_exp
+        num_rinse = sam.targ_num_rinses  # target number of mixes, from user_config_exp
+        is_complex = True   # all actions [load, reload, only_mix, unload, rinse]
+        three_mixes = 0  # number of mixes for transfer action
+        sam_sequence: List[ActionInfo] = []  # planned sequence of complex steps for this sample
+        time_stmp = 0  # start time is zero for each sample, changed when consolidating actions
+
+        # TODO: start here on 5/4/23
+
+        # start by loading/inoculating the sample
+        act_type = 'load'
+        is_complex = True  # load is a complex action with 2 steps, 2 tips
+        num_mixes = 3  # number of mixes AFTER load action, with sample tip
+        for i in range(num_inoc):
+            inoc_loc = sam.inoc_locs[i]
+            inoc_frac = sam.inoc_fracs[i]
+            inoc_vol = max_vol * inoc_frac
+            new_action = ActionInfo(sam_loc, act_type, act_type,
+                                    sam_ord, time_stmp,
+                                    inoc_loc, sam_loc, inoc_vol,
+                                    sam_tip, num_mixes, is_complex)
+            time_stmp = new_action.end  # update the next start time
+            sam_sequence.append(new_action)  # add to list of actions
+        #
+        # this_action.change_tip(sample.assigned_tip)  # load tip
+        # # current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
+        # sam_sequence.append(this_action)
+
+        gap_time = math.ceil(incub_time / (num_mix + 1))
+        for i in range(num_mix):
+            time_stmp = time_stmp + gap_time
+            this_action = ActionInfo(this_sam_indx, 'mix', time_stmp)
+            this_action.change_tip(sample.assigned_tip)  # load tip
+            sam_sequence.append(this_action)
+        # the timestamps for 'reload' will be resorted at the end
+        for i in range(sample.targ_num_reload):
+            gap_time = (i + 1) * max_time_before_evap_m * 60
+            this_action = ActionInfo(this_sam_indx, 'reload', gap_time)
+            this_action.change_tip(sample.assigned_tip)  # load tip
+            sam_sequence.append(this_action)
+        time_stmp = targ_inc_time_s
+        this_action = ActionInfo(this_sam_indx, 'unload', time_stmp)
+        # sample.which_tip_loc = exp.find_next_tip(sample.which_tip_loc)  # find next tip loc
+        add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks instead?
+        tip_ids.append(add_tip)  # new tip to unload
+        this_action.change_tip(add_tip)
+        sam_sequence.append(this_action)
+        add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks
+        tip_ids.append(add_tip)  # new tip to rinse, every rinse
+        time_stmp = time_stmp + 3 * rinse_time_s + 60 * max_incub
+        for i in range(sample.targ_num_rinses):
+            this_action = ActionInfo(this_sam_indx, 'rinse', time_stmp)
+            this_action.change_tip(add_tip)
+            sam_sequence.append(this_action)
+            time_stmp = time_stmp + 3 * rinse_time_s
+        # this_action = ActClass(this_sam_indx, 'done', sam_timestamp)
+        # exp_sequence.append(this_action)
+        sample.targ_act_seq = sam_sequence
+        # debug block...
+        print("------------------------------------------------------------------------------------")  # debug
+        f_out_string = "Sample name: " + str(sample.sample_name) + " indexed # " \
+                       + str(this_sam_indx) + " on plate # " + str(plate_index) + " & well # " \
+                       + str(this_well_on_plate) + " with sequence: "  # debug
+
+        return sam
+
+    # TODO: start here on 4/26/23
     # first, set up reservoir data: exp.all_res_data
     all_res_input = deepcopy(exp.res_data)  # sample data inputted in user_config_exp
     res_racks = deepcopy(exp.res_plate_wells)  # rack data generated by calc_nums_exp
@@ -1432,8 +1602,8 @@ def set_up_res_sam_data(exp: ExperimentData):
             ending = in_res[2]  # (end_vol_uL, end_conc_uM)
             content = in_res[3]  # res_data contents
             new_res = ResWellData()  # new ResWell object
-            new_res.plate_slot_num = slot_num  # slot number for rack
-            new_res.well_id_num = well_id  # well id on rack
+            new_res.slot_num = slot_num  # slot number for rack
+            new_res.well_id = well_id  # well id on rack
             new_res.loc = res_loc  # (Slot_#, Well_#)
             new_res.max_vol = max_vol  # max volume for wells in this rack
             new_res.curr_vol = starting[0]  # start_vol_uL
@@ -1453,7 +1623,8 @@ def set_up_res_sam_data(exp: ExperimentData):
 
     # second, set up sample well data: exp.all_samples
     all_sam_input = deepcopy(exp.sam_data)  # sample data inputted in user_config_exp()
-    sam_racks = deepcopy(exp.sam_plate_wells)  # sample rack data generated by calc_nums_exp()
+    sam_racks = deepcopy(exp.sam_plate_wells)  # sample rack data generated by calc_nums_exp(
+    res_data = deepcopy(exp.all_res_data)  # not alias - needs to be copied back
     sam_data_set = []  # list of SamWellData objects (nested by rack)
     sam_incub_set = []  # list of [(sam_incub_time, (sam_loc)),...], not ordered or nested by rack
     max_incub_time = 0  # max incubation time for all samples
@@ -1482,52 +1653,80 @@ def set_up_res_sam_data(exp: ExperimentData):
             new_sam.slot_num = slot_num  # sample rack OT2 Deck slot
             new_sam.well_id = well_id  # well id on the rack, zero to num_wells-1
             new_sam.loc = sam_loc  # Sample location (rack_num, well_id)
-            targ_incub_m = incub_info[0]  # targ_incub_min
+            targ_incub_m = incub_info[0]  # targ_incub_min, integer preferred
             new_sam.targ_num_mixes = incub_info[1]  # target num_mixes
             new_sam.targ_num_rinses = incub_info[2]  # target num_rinses
-            new_sam.targ_incub_time_m = targ_incub_m  # targ_incub_min
+            new_sam.targ_incub_time_m = targ_incub_m  # targ_incub_minutes, integer preferred
+            new_sam.targ_incub_time_s = int(60*targ_incub_m)  # targ_incub_seconds
             new_sam.max_vol = max_vol  # max volume for wells in sample rack
             new_sam.dig_vol = start_vol  # start volume for sample well
+            new_sam.start_dry = exp.start_dry
+            new_sam.store_dry = exp.store_dry
             num_inoc_res = res_locs[0]  # number of inoculation solutions
             new_sam.num_inoc_sol = num_inoc_res  # number of inoculation solutions
             inoc_locs = []  # inoculation locations for this sample
             inoc_fracs = []  # inoculation fractions for above locations
+            inoc_contents = []  # inoculation solution contents
+            inoc_concentration = []  # inoculation solution concentrations
             for each_res in range(1, num_inoc_res):
                 res_loc = res_locs[each_res]  # (rack_num, well_id, 'sol', vol_frac)
                 res_slot = res_loc[0]  # Slot_#
                 res_well = res_loc[1]  # Well_#
                 res_frac = res_loc[3]  # volume_fraction
-                res_loc = (res_slot, res_well)  # (Slot_#, Well_#)
+                res_loc = (res_slot, res_well)  # (Slot_#, Well_#) # new variable
+                res_indx = exp.find_res_in_nest_list(res_loc)  # find indices for inoc sol, in all_res_data
+                inoc_res = res_data[res_indx[0]][res_indx[1]]  # select disputant ResWellData from all_res_data
+                inoc_contents.append(inoc_res.contents)  # append to solution contents
+                inoc_concentration.append(inoc_res.goal_conc)  # append to solution concentrations
                 inoc_locs.append(res_loc)  # append to locations
                 inoc_fracs.append(res_frac)  # append to fractions
             new_sam.inoc_locs = tuple(inoc_locs)  # inoculation locations for this sample
             new_sam.inoc_fracs = tuple(inoc_fracs)  # inoculation fractions for above locations
+            new_sam.incub_sols = tuple(inoc_contents)  # inoculation solution set contents
+            new_sam.incub_conc = tuple(inoc_concentration)  # inoculation solution concentrations
             new_sam.assigned_tip = next_tip_loc  # assign tip
             next_tip_loc = exp.find_next_tip(which_pipette)  # find next tip loc
-            add_incub = (targ_incub_m, sam_loc)  # incubation_time, (rack_num, well_id)
+            add_incub = (targ_incub_m, sam_loc)  # (incubation_time, (rack_num, well_id))
+            # if target incubation time exceeds max time before evaporation
             if targ_incub_m > exp.max_time_before_evap_m:
-                num_reload = int(targ_incub_m/exp.max_time_before_evap_m)
+                num_reload = int(targ_incub_m / exp.max_time_before_evap_m)  # num of reloads, min integer
                 new_sam.targ_num_reload = num_reload  # num of times to reload
                 new_sam.targ_num_mixes -= num_reload  # subtract from num mixes
-                if new_sam.targ_num_mixes < 0:
-                    new_sam.targ_num_mixes = 0
+            if new_sam.targ_num_mixes < 0:
+                new_sam.targ_num_mixes = 0  # if num reload higher than num mixes
             if targ_incub_m > max_incub_time:
                 max_incub_time = targ_incub_m  # find max incubation time
             sam_incub_set.append(add_incub)  # list of (incubation_time, (rack_num, well_id))
+            exp_sequence: List[ActionInfo] = []
+            sam_timestamp = 0
+
             rack_set.append(new_sam)  # list of ResWell objects corresponding to this rack
         sam_data_set.append(rack_set)  # nested list of SamWellData objects corresponding to all racks
     exp.all_samples = sam_data_set  # modifiable, nested list of SamWellData objects, grouped by racks
 
     # third, determine the inoculation order based on incubation time
     if exp.incub_longest_first:
+        # each in set is (incubation_time, (rack_num, well_id))
         sam_incub_set.sort(reverse=True)  # order by incubation time, the longest first
     else:
+        # each in set is (incubation_time, (rack_num, well_id))
         sam_incub_set.sort()  # order by incubation time, the shortest first
     incub_locs = []  # list of samples in order of inoculation
     for item in sam_incub_set:
-        incub_locs.append(item[1])  # (incubation_time, (rack_num, well_id))
+        incub_locs.append(item[1])  # (0:incubation_time, 1:(rack_num, well_id))
     exp.incub_loc_order = tuple(incub_locs)  # make immutable
     exp.max_incub_m = max_incub_time  # record max incubation time
+
+    # sort through inoculation order of the samples
+    for inoc_index in range(len(exp.incub_loc_order)):
+        # inoc_index from 0 to len - 1
+        sam_loc = exp.incub_loc_order[inoc_index]  # sam loc
+        # sam_indx = find_sam_in_nest_list(exp.all_samples, sam_loc)  # get sam index from loc
+        sam_indx = exp.find_sam_in_nest_list(sam_loc)  # get sam index from loc
+        sam_data = exp.all_samples[sam_indx[0]][sam_indx[1]]  # get sam data from index
+        sam_data.sam_inoculation_timing = inoc_index  # modify inoculation timing to index
+        # TODO: start here on 4/26/23
+
 
     # print debug info:
     # for rack in exp.all_res_data:
@@ -1681,6 +1880,7 @@ def plan_dil_series(exp: ExperimentData):
     zero_mixes = 0  # number of mixes for transfer action
     num_times_mixed = 10  # number of times a dilution is mixed
     action_set = []  # full action plan for dilutions
+    dilution_num = 0  # dilution number, note-keeping for action infor
     for type_indx in range(num_types):
         this_type = exp.content_types[type_indx]  # select content type
         res_subset = res_set_per_content[type_indx]  # select res set for this content
@@ -1688,7 +1888,7 @@ def plan_dil_series(exp: ExperimentData):
         for res in res_subset:
             # recall list with goal-concentration (highest to lowest) order
             if not res.dilution_complete:
-                # create actions for this reservoir:
+                # create actions for this reservoir, tracked by dilution_num:
                 # (1) transf concentrated solution from parent to child
                 # (2) transf DI dilution solution from parent to child
                 # (3) mix solution in current reservoir
@@ -1698,8 +1898,11 @@ def plan_dil_series(exp: ExperimentData):
                 par_res = res_subset[par_indx]  # select reservoir
                 par_tip = par_res.assigned_tip  # use tip of the 'from' reservoir
                 sol_vol = res.par_transf_vol  # transfer volume from concentrated parent
-                new_action = ActionInfo(res.loc, 'transf', res_timestamp,
-                                        sol_parent, res.loc, sol_vol, par_tip, zero_mixes)
+                is_complex = False
+                new_action = ActionInfo(res.loc, 'transf', 'dilution',
+                                        dilution_num, res_timestamp,
+                                        sol_parent, res.loc, sol_vol,
+                                        par_tip, zero_mixes, is_complex)
                 par_res.dig_vol = par_res.dig_vol - sol_vol  # update parent res volume
                 res.dig_vol = res.dig_vol + sol_vol  # update current res volume
                 res_timestamp = new_action.end  # update the next start time
@@ -1707,11 +1910,14 @@ def plan_dil_series(exp: ExperimentData):
                 print(new_action)  # debug
                 dil_vol = res.goal_vol - sol_vol  # calculate dilution volume
                 dil_loc = exp.cur_rinse  # location of dilution parent
-                dil_indx = find_res_in_nest_list(res_data, dil_loc)  # find indices for disputant
+                # dil_indx = find_res_in_nest_list(res_data, dil_loc)  # find indices for dilutant
+                dil_indx = exp.find_res_in_nest_list(dil_loc) # find indices for dilutant, in all_res_data
                 dil_res = res_data[dil_indx[0]][dil_indx[1]]  # select disputant reservoir
                 dil_tip = dil_res.assigned_tip  # tip of the dilution reservoir
-                new_action = ActionInfo(res.loc, 'transf', res_timestamp,
-                                        dil_loc, res.loc, dil_vol, dil_tip, zero_mixes)
+                new_action = ActionInfo(res.loc, 'transf', 'dilution',
+                                        dilution_num, res_timestamp,
+                                        dil_loc, res.loc, dil_vol,
+                                        dil_tip, zero_mixes, is_complex)
                 res.dig_vol = res.dig_vol + dil_vol  # update current res volume
                 dil_res.dig_vol = dil_res.dig_vol - dil_vol  # update disputant res volume
                 if dil_res.dig_vol < 100:
@@ -1722,13 +1928,15 @@ def plan_dil_series(exp: ExperimentData):
                 print(new_action)  # debug
                 mix_vol = min(1000, int(0.5 * res.goal_vol))  # choose smaller volume
                 res_tip = res.assigned_tip  # tip of the child reservoir
-                new_action = ActionInfo(res.loc, 'mix', res_timestamp,
-                                        res.loc, res.loc, mix_vol, res_tip, num_times_mixed)
+                new_action = ActionInfo(res.loc, 'mix', 'dilution',
+                                        dilution_num, res_timestamp,
+                                        res.loc, res.loc, mix_vol,
+                                        res_tip, num_times_mixed, is_complex)
                 res_timestamp = new_action.end  # update the next start time
                 action_set.append(new_action)  # add to list of actions
                 print(new_action)  # debug
+                dilution_num += 1  # iterate dilution number
 
-    # todo: check that the copy back works
     exp.all_res_data = res_data  # copy res_data back to exp, since deepcopy was used
     exp.pln_dilut_seq = action_set  # copy dilution action set
 
@@ -1742,6 +1950,46 @@ def config_samples(exp: ExperimentData):
     # (list of lists of objects of class SampleWell !)
     # MODIFY description of components
 
+    def spread_complex_action(all_acts: List[ActionInfo],
+                              all_sam: List[List[SamWellData]],
+                              all_res: List[List[ResWellData]]):
+        action_set = []
+        sam_timestamp = 0  # timestamps for use with actions
+        # TODO: start here on 5/5/23
+        for each_act in all_acts:
+            if each_act.complex:
+                # expand this action
+                act_type = each_act.action
+                if act_type == 'load':
+                    print('decompressing action:', act_type)
+                    sam_loc = each_act.keeper
+                    res_loc = each_act.par_loc
+                    is_complex = False
+                    new_action = ActionInfo(sam_loc, 'transf', act_type, sam_timestamp,
+                                            sol_parent, res.loc, sol_vol,
+                                            par_tip, zero_mixes, is_complex)
+                    new_action = ActionInfo(sam_loc, 'transf', act_type,
+                                            dilution_num, sam_timestamp,
+                                            sol_parent, res.loc, sol_vol,
+                                            par_tip, zero_mixes, is_complex)
+                elif act_type == 'reload':
+                    print('decompressing action:', act_type)
+                    sam_loc = each_act.keeper
+                    res_loc = each_act.par_loc
+                    waste_loc = each_act.targ_loc
+                elif act_type == 'unload' or act_type == 'rinse':
+                    print('decompressing action:', act_type)
+                    sam_loc = each_act.keeper
+                    res_loc = each_act.par_loc
+                    waste_loc = each_act.targ_loc
+                else:
+                    print(act_type, "is not a complex action")
+                    action_set.append(each_act)
+
+            else:
+                action_set.append(each_act)
+        return action_set
+
     exp = calc_nums_exp(exp)  # first, calc the totals in exp, set up rack data, print rack info
     exp = set_up_res_sam_data(exp)  # second, set up data for reservoirs and sample wells,
     # also, obtain order of inoculation exp.incub_loc_order
@@ -1749,7 +1997,7 @@ def config_samples(exp: ExperimentData):
         print("Do dilutions")  # debug
         exp = plan_dil_series(exp)  # third, plan dilution series
 
-    # TODO: start here on 4/14/23
+    # TODO: start here on 5/4/23
     sam_data_set = deepcopy(exp.all_samples)
     incubation_order = exp.incub_loc_order
 
@@ -1785,9 +2033,9 @@ def config_samples(exp: ExperimentData):
             # plate_data_set.append(SamWellData())  # appends object of SampleWell class to list
             # sample = plate_data_set[this_well_on_plate]
             # this_sam_indx = all_on_prev_plates + this_well_on_plate
-            sample.sam_indx = this_sam_indx # not used anymore - how to replace
+            # sample.sam_indx = this_sam_indx  # not used anymore - replaced with indices (rack_id, well_id)
             # sample.sample_name = exp.sam_names[this_sam_indx]
-            sample.sam_timing = exp.sam_timing[this_sam_indx]  # not used anymore - how to replace
+            # sample.sam_inoculation_timing = exp.sam_timing[this_sam_indx]  # not used anymore replaced with zero to max from incub_loc_order
             # sample.plate_indx = exp.sam_plate_indx_nums[this_sam_indx]
             # sample.slot_num = exp.slots_sam_plates[plate_index]
             # sample.well_id = exp.sam_well_indx_nums[this_sam_indx]
@@ -1804,60 +2052,61 @@ def config_samples(exp: ExperimentData):
 
             # MODIFY THIS BEFORE RUNNING!
             # MODIFY to "locations" and fraction of total volume
-            sample.solution_location = exp.sam_inoculation_locations[this_sam_indx]
+            # sample.solution_location = exp.sam_inoculation_locations[this_sam_indx]  # using res_loc instead
             # MODIFY tp finding index with location data
             # parent_res = [res for res in res_subset if res.loc == this_res.parent_sol_loc]
-            sample.solution_index = 0  # res_locations.index(sample.solution_location)
-            this_res_data = exp.res_data[sample.solution_index]  # choose solution data_set (alias)
-            sample.assigned_tip = this_res_data.assigned_tip  # tuple (rack, well) - corresponds to res_well
-            sample.incub_solution = this_res_data.contents
-            sample.incub_concen = this_res_data.curr_conc
+            # sample.solution_index = 0  # res_locations.index(sample.solution_location)
+            # this_res_data = exp.res_data[sample.solution_index]  # choose solution data_set (alias)
+            # sample.assigned_tip = this_res_data.assigned_tip  # tuple (rack, well) - corresponds to res_well
+            # sample.incub_solution = this_res_data.contents
+            # sample.incub_concen = this_res_data.curr_conc
 
             # sample.targ_incub_gap_time_m = exp.sample_targ_incub_gap_times_min[start_sam]
-            sample.loc = (sample.plate_indx, sample.well_id)
-            targ_inc_time_s = math.ceil(60 * sample.targ_incub_time_m)
-            exp_sequence: List[ActionInfo] = []
-            sam_timestamp = 0
-            this_action = ActionInfo(this_sam_indx, 'load', sam_timestamp)
-            this_action.change_tip(sample.assigned_tip)  # load tip
-            # current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
-            exp_sequence.append(this_action)
-            gap_time = math.ceil(targ_inc_time_s / (sample.targ_num_mixes + 1))
-            for i in range(sample.targ_num_mixes):
-                sam_timestamp = sam_timestamp + gap_time
-                this_action = ActionInfo(this_sam_indx, 'mix', sam_timestamp)
-                this_action.change_tip(sample.assigned_tip)  # load tip
-                exp_sequence.append(this_action)
-            # the timestamps for 'reload' will be resorted at the end
-            for i in range(sample.targ_num_reload):
-                gap_time = (i + 1) * max_time_before_evap_m * 60
-                this_action = ActionInfo(this_sam_indx, 'reload', gap_time)
-                this_action.change_tip(sample.assigned_tip)  # load tip
-                exp_sequence.append(this_action)
-            sam_timestamp = targ_inc_time_s
-            this_action = ActionInfo(this_sam_indx, 'unload', sam_timestamp)
-            # sample.which_tip_loc = exp.find_next_tip(sample.which_tip_loc)  # find next tip loc
-            add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks instead?
-            tip_ids.append(add_tip)  # new tip to unload
-            this_action.change_tip(add_tip)
-            exp_sequence.append(this_action)
-            add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks
-            tip_ids.append(add_tip)  # new tip to rinse, every rinse
-            sam_timestamp = sam_timestamp + 3 * rinse_time_s + 60 * max_incub
-            for i in range(sample.targ_num_rinses):
-                this_action = ActionInfo(this_sam_indx, 'rinse', sam_timestamp)
-                this_action.change_tip(add_tip)
-                exp_sequence.append(this_action)
-                sam_timestamp = sam_timestamp + 3 * rinse_time_s
-            # this_action = ActClass(this_sam_indx, 'done', sam_timestamp)
+            # sample.loc = (sample.plate_indx, sample.well_id)
+            # targ_inc_time_s = math.ceil(60 * sample.targ_incub_time_m)
+            # TODO: start here on 4/26/23
+            # exp_sequence: List[ActionInfo] = []
+            # sam_timestamp = 0
+            # this_action = ActionInfo(this_sam_indx, 'load', sam_timestamp)
+            # this_action.change_tip(sample.assigned_tip)  # load tip
+            # # current_tip_loc = exp.find_next_tip(current_tip_loc)  # find next tip loc
             # exp_sequence.append(this_action)
-            sample.targ_act_seq = exp_sequence
-            # debug block...
-            print("------------------------------------------------------------------------------------")  # debug
-            f_out_string = "Sample name: " + str(sample.sample_name) + " indexed # " \
-                           + str(this_sam_indx) + " on plate # " + str(plate_index) + " & well # " \
-                           + str(this_well_on_plate) + " with sequence: "  # debug
-            print(f_out_string)  # debug
+            # gap_time = math.ceil(targ_inc_time_s / (sample.targ_num_mixes + 1))
+            # for i in range(sample.targ_num_mixes):
+            #     sam_timestamp = sam_timestamp + gap_time
+            #     this_action = ActionInfo(this_sam_indx, 'mix', sam_timestamp)
+            #     this_action.change_tip(sample.assigned_tip)  # load tip
+            #     exp_sequence.append(this_action)
+            # # the timestamps for 'reload' will be resorted at the end
+            # for i in range(sample.targ_num_reload):
+            #     gap_time = (i + 1) * max_time_before_evap_m * 60
+            #     this_action = ActionInfo(this_sam_indx, 'reload', gap_time)
+            #     this_action.change_tip(sample.assigned_tip)  # load tip
+            #     exp_sequence.append(this_action)
+            # sam_timestamp = targ_inc_time_s
+            # this_action = ActionInfo(this_sam_indx, 'unload', sam_timestamp)
+            # # sample.which_tip_loc = exp.find_next_tip(sample.which_tip_loc)  # find next tip loc
+            # add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks instead?
+            # tip_ids.append(add_tip)  # new tip to unload
+            # this_action.change_tip(add_tip)
+            # exp_sequence.append(this_action)
+            # add_tip = tip_ids[-1] + 1  # pick from exp.tips_in_racks
+            # tip_ids.append(add_tip)  # new tip to rinse, every rinse
+            # sam_timestamp = sam_timestamp + 3 * rinse_time_s + 60 * max_incub
+            # for i in range(sample.targ_num_rinses):
+            #     this_action = ActionInfo(this_sam_indx, 'rinse', sam_timestamp)
+            #     this_action.change_tip(add_tip)
+            #     exp_sequence.append(this_action)
+            #     sam_timestamp = sam_timestamp + 3 * rinse_time_s
+            # # this_action = ActClass(this_sam_indx, 'done', sam_timestamp)
+            # # exp_sequence.append(this_action)
+            # sample.targ_act_seq = exp_sequence
+            # # debug block...
+            # print("------------------------------------------------------------------------------------")  # debug
+            # f_out_string = "Sample name: " + str(sample.sample_name) + " indexed # " \
+            #                + str(this_sam_indx) + " on plate # " + str(plate_index) + " & well # " \
+            #                + str(this_well_on_plate) + " with sequence: "  # debug
+            # print(f_out_string)  # debug
             print(sample.targ_act_seq)  # debug
             # print(vars(sample))  # debug
         all_on_prev_plates = all_on_prev_plates + num_wells_on_this_plate
@@ -1978,11 +2227,11 @@ def user_config_exp():
                        ((9, 5, 'res'), (0, 0), (5000, 400), 'Thiol_2_sol'),)
 
     # Fifth, for each sample on the sample plate, indicate:
-    # (sam_loc, (num_inoc,(inoc_sol_loc)), (targ_incub,num_mixes,num_rinses), 'sam_name')
+    # (sam_loc, (num_inoc,(inoc_sol_loc)), (incub_time_min_int,num_mixes,num_rinses), 'sam_name')
     # sam_loc: (rack_num, well_id, 'sam')  # sample location - 'sam' should be last
     # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
     # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
-    # targ_incub: number of minutes to incubate solution on sample
+    # incub_time_min_int: number of minutes to incubate solution on sample, integer preferred
     # num_mixes: num of times incubating solution is mixed during incubation
     # num_rinses: num of times solution is rinsed after incubation
     my_exp.sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol', 1.0),), (32, 3, 4), 'USC23Au0401a'),
