@@ -128,14 +128,23 @@ class ExperimentData:
         # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
         # eg: zero-index of 6 well goes 0:A1, 1:B1, 2:A2, 3:B2, 4:A3, 5:B3
         self.input_res_data = (((1, 0, 'res'), (0, 0), (0, 0), 'DI_sol'),)  # user_config_exp
-        # (sam_loc, (num_inoc,(inoc_sol_loc)), (targ_incub,num_mixes,num_rinses), 'sam_name')
+        # (sam_loc, 'sam_name', (num_inoc,(inoc_sol_loc_and_timing),))
         # sam_loc: (rack_num, well_id, 'sam')  # sample location - 'sam' should be last
-        # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
-        # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
-        # targ_incub: number of minutes to incubate solution on sample
-        # num_mixes: num of times incubating solution is mixed during incubation
-        # num_rinses: num of times solution is rinsed after incubation
-        self.input_sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol'),), (20, 3, 4), 'sam_name'),)  # user_config_exp
+        # 'sam_name': should be an original name, preferably including run date and user initials
+        # num_inoc : number of inoculation solutions, with a minimum of 1 for each sample
+        # for multiple inoculation solutions, (num_sol, (sol_1),(sol_2),...)
+        # inoc_sol_loc_and_timing: (rack_num, well_id, 'sol', (inoc_info))
+        # inoc_info: (vol_frac, inoculate_min_int, incubate_time_min_int, num_mixes, num_rinses)
+        # vol_frac: volume of the sample well to fill (0.0-1.0)
+        # inoculate_min_int: when inoculation should occur, in minutes (integer preferred), during exp,
+        # where zero is start of each sample's experiment
+        # incubate_time_min_int: incubation time, in minutes to  solution on sample, integer preferred
+        # num_mixes: num of times incubating solution is mixed during incubation, evenly distributed
+        # num_rinses: num of times solution is rinsed after incubation, before the next inoculation step
+        # for solutions that require a mixture of multiple solutions BEFORE incubation,
+        # indicate identical inoculate_min_int and incubate_time_min_int for each solution
+        # the max of num_mixes and num_rinses of all solutions will be used.
+        self.input_sam_data = (((2, 0, 'sam'), 'sam_name', (1, (5, 0, 'sol', (1.0, 0, 32, 3, 4)),)),)  # user_config_exp
         self.incub_loc_order = ((1, 0),)  # inoculated sam order, by loc, longest incubation first
         self.max_incub_m = 1  # maximum incubation time for all samples
 
@@ -1410,16 +1419,17 @@ def calc_nums_exp(exp: ExperimentData):
         # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
         # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
         sam_loc = in_sam[0]  # sam_loc = (Slot_#, Well_#, 'sam')
-        res_locs = in_sam[1]  # (num_sol, (rack_num, well_id, 'sol', vol_frac),...)
+        res_locs = in_sam[2]  # (num_sol, (rack_num, well_id, 'sol', (inoc_info)),...)
         if sam_loc[2] != 'sam':
             print("Warning, first item of each sam_data item must be (slot_num, well_id, 'sam')")
         sam_slot = sam_loc[0]  # rack slot num
         sam_well = sam_loc[1]  # well id
         sam_loc = (sam_slot, sam_well)  # location
         num_inoc_res = res_locs[0]  # number of inoculation solutions
-        sum_frac = 0.0  # total fraction of all inoculation solutions
+        sum_frac = 0.0  # total fraction of all inoculation solutions at time zero
         # check inoculation reservoir locations
         for each_res in range(1, num_inoc_res + 1):
+            # since res_locs[0] = num_sol, starting at 1
             res_loc = res_locs[each_res]  # for each inoc res loc listed in user_config_exp()
             res_slot = res_loc[0]  # Slot_#
             res_well = res_loc[1]  # Well_#
@@ -2151,6 +2161,9 @@ def user_config_exp():
     # |  4 |  5 |  6 |  # load sam racks farther from  fan (right)  |  V    V         V   |
     # |  1 |  2 |  3 |  # run check_offsets to confirm xyz loc      |7:H1  15:H2--> 95:H12|
     # ====================================================================================|
+    # Please note pipette limits and accuracy while planning experiment:
+    # The 'small' pipette can dispense between 1.00 +/-0.15 uL and 20.0 +/-0.3 uL.
+    # The 'large' pipette can dispense between 100 +/-2 uL and 1000 +/-7 uL.
     my_exp.exp_name = "TestingTimeManagement"  # update every run
     my_exp.exp_date = 20230103  # yyyymmdd # update every run
     my_exp.pipettes_in_use = 'large'  # 'large', 'small' or 'both'
@@ -2213,6 +2226,9 @@ def user_config_exp():
     # location, start/end volumes (1mL=1000uL) & concentrations (uM=umol/L)
     # ((Slot_#, Well_#, 'res'), (start_vol_uL, start_conc_uM), (end_vol_uL, end_conc_uM), 'contents')
     # eg: zero-index of 6 well goes 0:A1, 1:B1, 2:A2, 3:B2, 4:A3, 5:B3
+    # This information will be used to determine when dilutions are needed
+    # prior to sample handling, with parent and child dilution reservoirs determined
+    # by the use of identical 'contents' string.
     my_exp.input_res_data = (((1, 0, 'res'), (50000, 0), (0, 0), 'DI_sol'),
                              ((1, 1, 'res'), (50000, 2000), (0, 2000), 'Thiol_1_sol'),
                              ((1, 2, 'res'), (0, 0), (30000, 0), 'Waste'),
@@ -2241,21 +2257,30 @@ def user_config_exp():
                              ((9, 5, 'res'), (0, 0), (5000, 400), 'Thiol_2_sol'),)
 
     # Fifth, for each sample on the sample plate, indicate:
-    # (sam_loc, (num_inoc,(inoc_sol_loc)), (incub_time_min_int,num_mixes,num_rinses), 'sam_name')
+    # (sam_loc, 'sam_name', (num_inoc,(inoc_sol_loc_and_timing),))
     # sam_loc: (rack_num, well_id, 'sam')  # sample location - 'sam' should be last
-    # inoc_sol_locs: (1, (rack_num, well_id, 'sol', vol_frac))  # inoculation solution loc
-    # for multiple inoculation solutions, inoc_sol_loc = (num_sol, (sol_1),(sol_2),...)
-    # incub_time_min_int: number of minutes to incubate solution on sample, integer preferred
-    # num_mixes: num of times incubating solution is mixed during incubation
-    # num_rinses: num of times solution is rinsed after incubation
-    my_exp.input_sam_data = (((2, 0, 'sam'), (1, (5, 0, 'sol', 1.0),), (32, 3, 4), 'USC23Au0401a'),
-                             ((2, 1, 'sam'), (1, (5, 1, 'sol', 1.0),), (24, 3, 4), 'USC23Au0401b'),
-                             ((2, 2, 'sam'), (1, (5, 2, 'sol', 1.0),), (4, 3, 4), 'USC23Au0401c'),
-                             ((2, 3, 'sam'), (1, (5, 3, 'sol', 1.0),), (20, 3, 4), 'USC23Au0401d'),
-                             ((3, 0, 'sam'), (1, (8, 0, 'sol', 1.0),), (8, 3, 4), 'USC23Au0401e'),
-                             ((3, 1, 'sam'), (1, (8, 1, 'sol', 1.0),), (12, 3, 4), 'USC23Au0401f'),
-                             ((3, 2, 'sam'), (1, (8, 2, 'sol', 1.0),), (16, 3, 4), 'USC23Au0401g'),
-                             ((3, 3, 'sam'), (1, (8, 3, 'sol', 1.0),), (28, 3, 4), 'USC23Au0401h'),)
+    # 'sam_name': should be an original name, preferably including run date and user initials
+    # num_inoc : number of inoculation solutions, with a minimum of 1 for each sample
+    # for multiple inoculation solutions, (num_sol, (sol_1),(sol_2),...)
+    # inoc_sol_loc_and_timing: (rack_num, well_id, 'sol', (inoc_info))
+    # inoc_info: (vol_frac, inoculate_min_int, incubate_time_min_int, num_mixes, num_rinses)
+    # vol_frac: volume of the sample well to fill (0.0-1.0)
+    # inoculate_min_int: when inoculation should occur, in minutes (integer preferred), during exp,
+    # where zero is start of each sample's experiment
+    # incubate_time_min_int: incubation time, in minutes to  solution on sample, integer preferred
+    # num_mixes: num of times incubating solution is mixed during incubation, evenly distributed
+    # num_rinses: num of times solution is rinsed after incubation, before the next inoculation step
+    # for solutions that require a mixture of multiple solutions BEFORE incubation,
+    # indicate identical inoculate_min_int and incubate_time_min_int for each solution
+    # the max of num_mixes and num_rinses of all solutions will be used.
+    my_exp.input_sam_data = (((2, 0, 'sam'), 'USC23Au0509a', (1, (5, 0, 'sol', (1.0, 0, 32, 3, 4)),)),
+                             ((2, 1, 'sam'), 'USC23Au0509b', (1, (5, 1, 'sol', (1.0, 0, 24, 3, 4)),)),
+                             ((2, 2, 'sam'), 'USC23Au0509c', (1, (5, 2, 'sol', (1.0, 0, 4,  3, 4)),)),
+                             ((2, 3, 'sam'), 'USC23Au0509d', (1, (5, 3, 'sol', (1.0, 0, 20, 3, 4)),)),
+                             ((3, 0, 'sam'), 'USC23Au0509e', (1, (8, 0, 'sol', (1.0, 0, 8,  3, 4)),)),
+                             ((3, 1, 'sam'), 'USC23Au0509f', (1, (8, 1, 'sol', (1.0, 0, 12, 3, 4)),)),
+                             ((3, 2, 'sam'), 'USC23Au0509g', (1, (8, 2, 'sol', (1.0, 0, 16, 3, 4)),)),
+                             ((3, 3, 'sam'), 'USC23Au0509h', (1, (8, 3, 'sol', (1.0, 0, 28, 3, 4)),)),)
 
     # Note: When using jupiter notebook, please check that custom
     # labware json files have been uploaded to /labware for use:
